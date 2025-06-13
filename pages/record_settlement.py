@@ -1,7 +1,7 @@
 import streamlit as st
 import mysql.connector
 from mysql.connector import Error
-from datetime import datetime
+from datetime import date
 
 # ---------- DB Connection ----------
 
@@ -18,22 +18,53 @@ def get_db_connection():
 def create_settlement_table():
     conn = get_db_connection()
     cursor = conn.cursor()
+
     cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settlements (
-            settlement_id INT AUTO_INCREMENT PRIMARY KEY,
-            project_id INT,
-            payer_name VARCHAR(255),
-            payee_name VARCHAR(255),
-            amount DECIMAL(10,2),
-            mode ENUM('cash', 'online'),
-            note TEXT,
-            settled_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-        );
-    """)
+                   CREATE TABLE IF NOT EXISTS settlements
+                   (
+                       settlement_id
+                       INT
+                       AUTO_INCREMENT
+                       PRIMARY
+                       KEY,
+                       project_id
+                       INT,
+                       paid_by
+                       VARCHAR
+                   (
+                       255
+                   ),
+                       paid_to VARCHAR
+                   (
+                       255
+                   ),
+                       amount DECIMAL
+                   (
+                       10,
+                       2
+                   ),
+                       mode ENUM
+                   (
+                       'cash',
+                       'online'
+                   ),
+                       remarks TEXT,
+                       date DATE,
+                       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                       FOREIGN KEY
+                   (
+                       project_id
+                   ) REFERENCES projects
+                   (
+                       project_id
+                   ) ON DELETE CASCADE
+                       );
+                   """)
+
     conn.commit()
     cursor.close()
     conn.close()
+
 
 # ---------- Fetch Helpers ----------
 
@@ -66,14 +97,14 @@ def get_all_participants(project_id):
 
 # ---------- Insert Payment ----------
 
-def record_payment(project_id, payer, payee, amount, mode, note):
+def record_payment(project_id, payer, payee, amount, mode, note, settlement_date):
     conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("""
-        INSERT INTO settlements (project_id, payer_name, payee_name, amount, mode, note)
-        VALUES (%s, %s, %s, %s, %s, %s)
-    """, (project_id, payer, payee, amount, mode, note))
+                   INSERT INTO settlements (project_id, payer_name, payee_name, amount, mode, note, settled_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s)
+                   """, (project_id, payer, payee, amount, mode, note, settlement_date))
 
     conn.commit()
     cursor.close()
@@ -107,13 +138,15 @@ def main():
 
     amount = st.number_input("Amount Paid", min_value=0.0, step=1.0)
     mode = st.selectbox("Payment Mode", ["cash", "online"])
+    settlement_date = st.date_input("Settlement Date", date.today())
+
     note = st.text_area("Optional Note")
 
     if st.button("Record Payment"):
         if amount == 0:
             st.error("Amount must be greater than 0.")
         else:
-            record_payment(project_id, payer, payee, amount, mode, note)
+            record_payment(project_id, payer, payee, amount, mode, note, settlement_date)
             st.success(f"Recorded payment of ₹{amount} from {payer} to {payee}")
 
 if __name__ == "__main__":

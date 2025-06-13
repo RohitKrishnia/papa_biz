@@ -25,10 +25,10 @@ def get_all_people_names():
     cursor.execute("SELECT DISTINCT sub_partner_name FROM sub_partners")
     sub_partner_names = [row[0] for row in cursor.fetchall()]
 
-    cursor.execute("SELECT DISTINCT owes_from FROM transaction_splits")
+    cursor.execute("SELECT DISTINCT receiver_name FROM transaction_splits")
     debtors = [row[0] for row in cursor.fetchall()]
 
-    cursor.execute("SELECT DISTINCT owes_to FROM transaction_splits")
+    cursor.execute("SELECT DISTINCT payer_name FROM transaction_splits")
     creditors = [row[0] for row in cursor.fetchall()]
 
     # Settlements
@@ -55,10 +55,13 @@ def compute_owed_amount(person1, person2):
     cursor.execute("""
         SELECT SUM(amount) AS total_debt
         FROM transaction_splits
-        WHERE owes_from = %s AND owes_to = %s
+        WHERE receiver_name= %s AND payer_name = %s
     """, (person1, person2))
     debt_result = cursor.fetchone()
     total_debt = debt_result['total_debt'] if debt_result['total_debt'] else 0.0
+
+
+
 
     # Total settled payments from person1 to person2
     cursor.execute("""
@@ -68,6 +71,8 @@ def compute_owed_amount(person1, person2):
     """, (person1, person2))
     payment_result = cursor.fetchone()
     total_paid = payment_result['total_paid'] if payment_result['total_paid'] else 0.0
+
+
 
     cursor.close()
     conn.close()
@@ -99,3 +104,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+
+
+

@@ -1,6 +1,7 @@
 import streamlit as st
 import mysql.connector
-from datetime import datetime
+from datetime import date
+
 
 # ---------- DB Setup ----------
 
@@ -66,11 +67,11 @@ def get_db_connection():
         database="real_estate_db"
     )
     
-
 def create_transaction_tables():
     conn = get_db_connection()
     cursor = conn.cursor()
 
+    # Transactions Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
             transaction_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -78,6 +79,7 @@ def create_transaction_tables():
             transaction_type ENUM('investment', 'expense'),
             paid_by VARCHAR(255),
             amount DECIMAL(10,2),
+            transaction_date DATE,
             mode ENUM('cash', 'online'),
             purpose TEXT,
             split_type ENUM('auto', 'custom'),
@@ -86,17 +88,19 @@ def create_transaction_tables():
         );
     """)
 
+    # Splits Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transaction_splits (
             split_id INT AUTO_INCREMENT PRIMARY KEY,
             transaction_id INT,
-            owes_to VARCHAR(255),
-            owes_from VARCHAR(255),
+            payer_name VARCHAR(255),
+            receiver_name VARCHAR(255),
             amount DECIMAL(10,2),
             FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE
         );
     """)
 
+    # Attachments Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transaction_attachments (
             attachment_id INT AUTO_INCREMENT PRIMARY KEY,
@@ -160,13 +164,14 @@ def main():
 
     project_id = project_name_to_id[selected_project]
     stakeholders = fetch_all_stakeholders(project_id)
-
+    transaction_date = st.date_input("Transaction Date", date.today())
     transaction_type = st.selectbox("Transaction Type", ["investment", "expense"])
     paid_by = st.selectbox("Paid By", stakeholders)
     amount = st.number_input("Amount", min_value=0.0, step=0.01)
     mode = st.selectbox("Mode of Payment", ["cash", "online"])
     purpose = st.text_area("Purpose of Transaction")
     split_type = st.radio("How to split?", ["share as per ownership", "custom"])
+    created_at = date.today()
 
     splits = []
 
@@ -208,25 +213,33 @@ def main():
             conn = get_db_connection()
             cursor = conn.cursor()
 
+            # Insert transaction
             cursor.execute("""
-                INSERT INTO transactions (project_id, transaction_type, paid_by, amount, mode, purpose, split_type)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-            """, (project_id, transaction_type, paid_by, amount, mode, purpose, 'custom' if split_type == "custom" else 'auto'))
-
+                           INSERT INTO transactions (project_id, transaction_type, paid_by, amount, transaction_date,
+                                                     mode, purpose, split_type)
+                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                           """, (
+                               project_id, transaction_type, paid_by, amount, transaction_date, mode, purpose,
+                               'auto'
+                           ))
             transaction_id = cursor.lastrowid
 
-            for owes_to, owes_from, amt in splits:
+            # Insert splits (example for auto-split logic - assume `splits` is a list of tuples)
+            # splits = [(payer_name, receiver_name, amount), ...]
+            for payer, receiver, split_amt in splits:
                 cursor.execute("""
-                    INSERT INTO transaction_splits (transaction_id, owes_to, owes_from, amount)
-                    VALUES (%s, %s, %s, %s)
-                """, (transaction_id, owes_to, owes_from, amt))
+                               INSERT INTO transaction_splits (transaction_id, payer_name, receiver_name, amount)
+                               VALUES (%s, %s, %s, %s)
+                               """, (transaction_id, payer, receiver, split_amt))
 
-            for fname, (file, desc) in file_descriptions.items():
+            # Insert attachments
+            for file in uploaded_files:
                 file_data = file.read()
+                desc = st.text_input(f"Description for {file.name}", key=f"desc_{file.name}")
                 cursor.execute("""
-                    INSERT INTO transaction_attachments (transaction_id, file_name, file_data, description)
-                    VALUES (%s, %s, %s, %s)
-                """, (transaction_id, fname, file_data, desc))
+                               INSERT INTO transaction_attachments (transaction_id, file_name, file_data, description)
+                               VALUES (%s, %s, %s, %s)
+                               """, (transaction_id, file.name, file_data, desc))
 
             conn.commit()
             st.success("✅ Transaction recorded successfully!")

@@ -16,7 +16,7 @@ def clear_all_tables():
         # Disable foreign key checks to allow truncating in the right order
         cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
 
-        tables = ["transaction_splits", "transactions", "attachments", "sub_partners", "partners", "projects"]
+        tables = ["transaction_splits", "transactions", "attachments", "sub_partners", "partners", "projects","settlements"]
         for table in tables:
             cursor.execute(f"TRUNCATE TABLE {table}")
 

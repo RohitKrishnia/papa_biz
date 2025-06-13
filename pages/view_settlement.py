@@ -36,8 +36,8 @@ def get_all_debts(project_id):
 
     cursor.execute("""
                    SELECT 
-                          ts.owes_from as debtor,
-                          ts.owes_to as creditor,
+                          ts.receiver_name as debtor,
+                          ts.payer_name as creditor,
                           ts.amount 
                    FROM transaction_splits ts
             JOIN transactions t
@@ -154,8 +154,8 @@ def total_settlements(project_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)
     cursor.execute("""
-                   SELECT ts.owes_from as debtor,
-                          ts.owes_to   as creditor,
+                   SELECT ts.receiver_name as debtor,
+                          ts.payer_name   as creditor,
                           ts.amount
                    FROM transaction_splits ts
                             JOIN transactions t
@@ -164,7 +164,7 @@ def total_settlements(project_id):
                    """, (project_id,))
     rows1 = cursor.fetchall()
     cursor.execute("""
-                   SELECT payer_name AS debtor, payee_name AS creditor, amount
+                   SELECT payer_name AS creditor, payee_name AS debtor, amount
                    FROM settlements
                    WHERE project_id = %s
                    """, (project_id,))
