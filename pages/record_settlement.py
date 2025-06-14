@@ -7,10 +7,11 @@ from datetime import date
 
 def get_db_connection():
     return mysql.connector.connect(
-        host="localhost",
-        user="root",
-        password="scooter4230",
-        database="real_estate_db"
+        host=st.secrets["mysql"]["host"],
+        user=st.secrets["mysql"]["user"],
+        password=st.secrets["mysql"]["password"],
+        database=st.secrets["mysql"]["database"],
+        port=st.secrets["mysql"]["port"]
     )
 
 # ---------- Create Table If Not Exists ----------
