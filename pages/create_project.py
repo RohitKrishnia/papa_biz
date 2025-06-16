@@ -7,10 +7,11 @@ from datetime import date
 
 def get_db_connection():
     return psycopg2.connect(
-        	host = "db.ogecahtzmpsznesragam.supabase.co"
-			port = 5432
-			database = "postgres"
-			user = "postgres"
+    
+        	host = "db.ogecahtzmpsznesragam.supabase.co",
+			port = 5432,
+			database = "postgres",
+			user = "postgres",
 			password = "vDKOd0VmurNGkYkJ"
     )
 
