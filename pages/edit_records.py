@@ -2,15 +2,18 @@ import streamlit as st
 import mysql.connector
 from mysql.connector import Error
 from datetime import datetime
+import psycopg2
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
+    conn = psycopg2.connect(
+                        host="db.ogecahtzmpsznesragam.supabase.co",
+                        database="postgres",
+                        user="postgres",
+                        password="vDKOd0VmurNGkYkJ",
+                        port=5432
     )
+    return conn
+
 def fetch_combined_entries(project_id):
     conn = get_db_connection()
     cursor = conn.cursor(dictionary=True)

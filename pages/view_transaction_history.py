@@ -1,24 +1,18 @@
-
-
-
-
-
-
-
 import streamlit as st
-import mysql.connector
 import pandas as pd
+import psycopg2
 
 # ---------- DB Connection ----------
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
+    conn = psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["database"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
     )
+    return conn
 
 # ---------- Fetch Project List ----------
 
@@ -35,22 +29,26 @@ def get_projects():
 
 def get_transactions(project_name):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
 
     cursor.execute("SELECT project_id FROM projects WHERE project_name = %s", (project_name,))
-    project = cursor.fetchone()
-    if not project:
-        return [], []
+    row = cursor.fetchone()
+    if not row:
+        cursor.close()
+        conn.close()
+        return [], None
 
-    project_id = project["project_id"]
+    project_id = row[0]
 
     cursor.execute("""
-        SELECT  transaction_type, paid_by, amount, mode, purpose, split_type, created_at
+        SELECT transaction_type, paid_by, amount, mode, purpose, split_type, created_at
         FROM transactions
         WHERE project_id = %s
         ORDER BY created_at DESC
     """, (project_id,))
-    transactions = cursor.fetchall()
+    rows = cursor.fetchall()
+    colnames = [desc[0] for desc in cursor.description]
+    transactions = [dict(zip(colnames, r)) for r in rows]
 
     cursor.close()
     conn.close()
@@ -60,15 +58,17 @@ def get_transactions(project_name):
 
 def get_settlements(project_id):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT payer_name, payee_name, amount, settled_at
+        SELECT paid_by, paid_to, amount, created_at
         FROM settlements
         WHERE project_id = %s
-        ORDER BY settled_at DESC
+        ORDER BY created_at DESC
     """, (project_id,))
-    settlements = cursor.fetchall()
+    rows = cursor.fetchall()
+    colnames = [desc[0] for desc in cursor.description]
+    settlements = [dict(zip(colnames, r)) for r in rows]
 
     cursor.close()
     conn.close()
@@ -81,6 +81,10 @@ def main():
     st.title("📜 View Transaction History & Settlements")
 
     projects = get_projects()
+    if not projects:
+        st.warning("No projects found.")
+        return
+
     selected_project = st.selectbox("Select a Project", projects)
 
     if selected_project:
@@ -95,14 +99,14 @@ def main():
             st.info("No transactions found for this project.")
 
         st.subheader("💸 Settlements")
-        settlements = get_settlements(project_id)
-
-        if settlements:
-            df_settle = pd.DataFrame(settlements)
-            df_settle.columns = [col.replace("_", " ").title() for col in df_settle.columns]
-            st.dataframe(df_settle)
-        else:
-            st.info("No settlements recorded for this project.")
+        if project_id is not None:
+            settlements = get_settlements(project_id)
+            if settlements:
+                df_settle = pd.DataFrame(settlements)
+                df_settle.columns = [col.replace("_", " ").title() for col in df_settle.columns]
+                st.dataframe(df_settle)
+            else:
+                st.info("No settlements recorded for this project.")
 
 if __name__ == "__main__":
     main()

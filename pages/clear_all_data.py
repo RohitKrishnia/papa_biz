@@ -1,35 +1,53 @@
 import streamlit as st
-import mysql.connector
+import psycopg2
+
+# ---------- DB Connection ----------
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
+    conn = psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["database"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
     )
+    return conn
+
+# ---------- Clear All Tables ----------
 
 def clear_all_tables():
     conn = get_db_connection()
     cursor = conn.cursor()
     try:
-        # Disable foreign key checks to allow truncating in the right order
-        cursor.execute("SET FOREIGN_KEY_CHECKS = 0")
+        # PostgreSQL: disable constraint checks temporarily
+        cursor.execute("SET session_replication_role = 'replica';")
 
-        tables = ["transaction_splits", "transactions", "attachments", "sub_partners", "partners", "projects","settlements"]
+        tables = [
+            "transaction_splits",
+            "transactions",
+            "attachments",
+            "sub_partners",
+            "partners",
+            "settlements",
+            "projects"
+        ]
+
         for table in tables:
-            cursor.execute(f"TRUNCATE TABLE {table}")
+            cursor.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE;")
 
-        cursor.execute("SET FOREIGN_KEY_CHECKS = 1")
+        cursor.execute("SET session_replication_role = 'origin';")
         conn.commit()
         return True
-    except mysql.connector.Error as e:
-        st.error(f"Error clearing data: {e}")
+
+    except Exception as e:
+        st.error(f"❌ Error clearing data: {e}")
         return False
+
     finally:
         cursor.close()
         conn.close()
+
+# ---------- Streamlit UI ----------
 
 def main():
     st.set_page_config(page_title="⚠️ Clear All Data")
@@ -38,11 +56,11 @@ def main():
     st.warning("This will permanently delete all projects, partners, transactions, and documents.")
 
     if st.checkbox("Yes, I understand the consequences"):
-        if st.button("Delete Everything"):
+        if st.button("🧨 Delete Everything"):
             if clear_all_tables():
                 st.success("✅ All tables cleared successfully.")
             else:
-                st.error("Something went wrong.")
+                st.error("Something went wrong during the cleanup.")
 
 if __name__ == "__main__":
     main()

@@ -1,195 +1,130 @@
 import streamlit as st
-import mysql.connector
 from collections import defaultdict
+import psycopg2
 
 # ---------- DB Connection ----------
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
+    conn = psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["database"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
     )
+    return conn
+
 # ---------- Fetch Project List ----------
 
 def get_projects():
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
     cursor.execute("SELECT project_id, project_name FROM projects")
-    data = cursor.fetchall()
+    rows = cursor.fetchall()
     cursor.close()
     conn.close()
-    return data
+    return [{"project_id": row[0], "project_name": row[1]} for row in rows]
 
 # ---------- Fetch All Debts ----------
 
 def get_all_debts(project_id):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    # cursor.execute("""
-    #     SELECT owes_to, owes_from, amount FROM transaction_splits
-    #     WHERE project_id = %s
-    # """, (project_id,))
-
+    cursor = conn.cursor()
     cursor.execute("""
-                   SELECT 
-                          ts.receiver_name as debtor,
-                          ts.payer_name as creditor,
-                          ts.amount 
-                   FROM transaction_splits ts
-            JOIN transactions t
-                   ON t.transaction_id = ts.transaction_id
-                   WHERE t.project_id = %s
-                   """, (project_id,))
-    debts = cursor.fetchall()
-
+        SELECT 
+            ts.receiver_name as debtor,
+            ts.payer_name as creditor,
+            ts.amount 
+        FROM transaction_splits ts
+        JOIN transactions t ON t.transaction_id = ts.transaction_id
+        WHERE t.project_id = %s
+    """, (project_id,))
+    rows = cursor.fetchall()
     cursor.close()
     conn.close()
-    return debts
+    return [{"debtor": r[0], "creditor": r[1], "amount": r[2]} for r in rows]
 
 # ---------- Fetch Settlements ----------
 
 def get_all_settlements(project_id):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
-
+    cursor = conn.cursor()
     cursor.execute("""
         SELECT payer_name AS debtor, payee_name AS creditor, amount
         FROM settlements
         WHERE project_id = %s
     """, (project_id,))
-    settlements = cursor.fetchall()
-
+    rows = cursor.fetchall()
     cursor.close()
     conn.close()
-    return settlements
+    return [{"debtor": r[0], "creditor": r[1], "amount": r[2]} for r in rows]
 
-# ---------- Compute Net Settlements ----------
+# ---------- Compute Net Settlements (Not used in main but fixed anyway) ----------
 
 def calculate_net_balances(debts, settlements):
     balance_sheet = defaultdict(lambda: defaultdict(float))
 
-    # Add all pending debts
     for entry in debts:
-        d = entry['debtor']
-        c = entry['creditor']
-        amt = float(entry['amount'])
-        balance_sheet[d][c] += amt
+        balance_sheet[entry['debtor']][entry['creditor']] += float(entry['amount'])
 
-
-    # Subtract recorded payments
     for entry in settlements:
-        d = entry['debtor']
-        c = entry['creditor']
-        amt = float(entry['amount'])
-        balance_sheet[d][c] -= amt
+        balance_sheet[entry['debtor']][entry['creditor']] -= float(entry['amount'])
 
-
-    # st.write(balance_sheet)
-
-    net_balances = defaultdict(float)
-
-    for settlement in settlements:
-        net_balances[settlement['owes_from']] -= float(row['split_amount'])
-        net_balances[row['owes_to']] += float(row['split_amount'])
-
-
-
-
-
-
-    # for row in rows:
-    #     net_balances[row['owes_from']] -= float(row['split_amount'])
-    #     net_balances[row['owes_to']] += float(row['split_amount'])
-    #
-    # # Now build who owes whom based on net balances
-    # owes = []
-    # debtors = [(k, v) for k, v in net_balances.items() if v < 0]
-    # creditors = [(k, v) for k, v in net_balances.items() if v > 0]
-    #
-    # debtors.sort(key=lambda x: x[1])
-    # creditors.sort(key=lambda x: x[1], reverse=True)
-
-
-
-    # Clean up near-zero values and flatten
-
-    # i, j = 0, 0
-    # settlements = []
-    #
-    # while i < len(debtors) and j < len(creditors):
-    #     debtor, d_amt = debtors[i]
-    #     creditor, c_amt = creditors[j]
-    #
-    #     transfer = min(-d_amt, c_amt)
-    #     settlements.append((debtor, creditor, round(transfer, 2)))
-    #
-    #     debtors[i] = (debtor, d_amt + transfer)
-    #     creditors[j] = (creditor, c_amt - transfer)
-    #
-    #     if abs(debtors[i][1]) < 1e-2:
-    #         i += 1
-    #     if abs(creditors[j][1]) < 1e-2:
-    #         j += 1
-    #
-    #
-    # return settlements
     final_settlements = []
-    for d, creditors in balance_sheet.items():
-        for c, amt in creditors.items():
+    for debtor, creditors in balance_sheet.items():
+        for creditor, amt in creditors.items():
             if round(amt, 2) > 0:
                 final_settlements.append({
-                    "from": d,
-                    "to": c,
+                    "from": debtor,
+                    "to": creditor,
                     "amount": round(amt, 2)
                 })
-
     return final_settlements
 
-# ---------- Streamlit UI ----------
+# ---------- Compute Net Summary for Display ----------
+
 def total_settlements(project_id):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor()
+    
+    # Debts
     cursor.execute("""
-                   SELECT ts.receiver_name as debtor,
-                          ts.payer_name   as creditor,
-                          ts.amount
-                   FROM transaction_splits ts
-                            JOIN transactions t
-                                 ON t.transaction_id = ts.transaction_id
-                   WHERE t.project_id = %s
-                   """, (project_id,))
+        SELECT ts.receiver_name as debtor,
+               ts.payer_name   as creditor,
+               ts.amount
+        FROM transaction_splits ts
+        JOIN transactions t ON t.transaction_id = ts.transaction_id
+        WHERE t.project_id = %s
+    """, (project_id,))
     rows1 = cursor.fetchall()
+
+    # Settlements
     cursor.execute("""
-                   SELECT payer_name AS creditor, payee_name AS debtor, amount
-                   FROM settlements
-                   WHERE project_id = %s
-                   """, (project_id,))
+        SELECT paid_by AS creditor, paid_to AS debtor, amount
+        FROM settlements
+        WHERE project_id = %s
+    """, (project_id,))
     rows2 = cursor.fetchall()
-    net_balances = defaultdict(float)
-    for row in rows1:
-        net_balances[row['debtor']] -= float(row['amount'])
-        net_balances[row['creditor']] += float(row['amount'])
-    for row in rows2:
-        net_balances[row['debtor']] -= float(row['amount'])
-        net_balances[row['creditor']] += float(row['amount'])
-
-
-
 
     cursor.close()
     conn.close()
 
-    owes = []
+    net_balances = defaultdict(float)
+
+    for row in rows1:
+        net_balances[row[0]] -= float(row[2])  # debtor
+        net_balances[row[1]] += float(row[2])  # creditor
+
+    for row in rows2:
+        net_balances[row[1]] -= float(row[2])  # debtor
+        net_balances[row[0]] += float(row[2])  # creditor
+
+    # Create final settlements
     debtors = [(k, v) for k, v in net_balances.items() if v < 0]
     creditors = [(k, v) for k, v in net_balances.items() if v > 0]
 
     debtors.sort(key=lambda x: x[1])
     creditors.sort(key=lambda x: x[1], reverse=True)
-
 
     i, j = 0, 0
     settlements = []
@@ -197,7 +132,6 @@ def total_settlements(project_id):
     while i < len(debtors) and j < len(creditors):
         debtor, d_amt = debtors[i]
         creditor, c_amt = creditors[j]
-
         transfer = min(-d_amt, c_amt)
         settlements.append((debtor, creditor, round(transfer, 2)))
 
@@ -209,14 +143,9 @@ def total_settlements(project_id):
         if abs(creditors[j][1]) < 1e-2:
             j += 1
 
-    cursor.close()
-    conn.close()
     return settlements
 
-
-
-
-
+# ---------- Streamlit UI ----------
 
 def main():
     st.set_page_config(page_title="View Settlements")
@@ -231,7 +160,6 @@ def main():
     selected_project = st.selectbox("Select a Project", list(project_map.keys()))
     project_id = project_map[selected_project]
 
-    # debts = get_all_debts(project_id)
     settlements = total_settlements(project_id)
 
     st.subheader("Net Settlements")
@@ -240,16 +168,6 @@ def main():
             st.markdown(f"🔄 **{debtor}** owes **₹{amount}** to **{creditor}**")
     else:
         st.success("✅ All dues are settled!")
-
-
-
-    # if not debts:
-    #     st.info("No debt records found for this project.")
-    #     return
-
-
-
-
 
 if __name__ == "__main__":
     main()

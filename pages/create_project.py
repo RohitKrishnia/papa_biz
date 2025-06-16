@@ -1,19 +1,17 @@
 import streamlit as st
-import mysql.connector
-from mysql.connector import Error
+import psycopg2
+from psycopg2 import Error
 from datetime import date
-import os
-import base64
 
 # ---------- Database Setup ----------
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
+    return psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["database"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
     )
 
 def create_tables():
@@ -22,7 +20,7 @@ def create_tables():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS projects (
-            project_id INT AUTO_INCREMENT PRIMARY KEY,
+            project_id SERIAL PRIMARY KEY,
             project_name VARCHAR(255) UNIQUE NOT NULL,
             description TEXT,
             start_date DATE
@@ -31,30 +29,30 @@ def create_tables():
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS partners (
-            partner_id INT AUTO_INCREMENT PRIMARY KEY,
-            project_id INT,
+            partner_id SERIAL PRIMARY KEY,
+            project_id INTEGER,
             partner_name VARCHAR(255),
-            share_percentage DECIMAL(5,2),
+            share_percentage NUMERIC(5,2),
             FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
     """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sub_partners (
-            sub_partner_id INT AUTO_INCREMENT PRIMARY KEY,
-            partner_id INT,
+            sub_partner_id SERIAL PRIMARY KEY,
+            partner_id INTEGER,
             sub_partner_name VARCHAR(255),
-            share_percentage DECIMAL(5,2),
+            share_percentage NUMERIC(5,2),
             FOREIGN KEY (partner_id) REFERENCES partners(partner_id) ON DELETE CASCADE
         );
     """)
 
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS attachments (
-            attachment_id INT AUTO_INCREMENT PRIMARY KEY,
-            project_id INT,
+            attachment_id SERIAL PRIMARY KEY,
+            project_id INTEGER,
             file_name VARCHAR(255),
-            file_data LONGBLOB,
+            file_data BYTEA,
             description TEXT,
             FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
@@ -105,14 +103,14 @@ def main():
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            cursor.execute("INSERT INTO projects (project_name, description, start_date) VALUES (%s, %s, %s)",
+            cursor.execute("INSERT INTO projects (project_name, description, start_date) VALUES (%s, %s, %s) RETURNING project_id;",
                            (project_name, description, start_date))
-            project_id = cursor.lastrowid
+            project_id = cursor.fetchone()[0]
 
             for partner_name, share, sub_partners in partners_data:
-                cursor.execute("INSERT INTO partners (project_id, partner_name, share_percentage) VALUES (%s, %s, %s)",
+                cursor.execute("INSERT INTO partners (project_id, partner_name, share_percentage) VALUES (%s, %s, %s) RETURNING partner_id;",
                                (project_id, partner_name, share))
-                partner_id = cursor.lastrowid
+                partner_id = cursor.fetchone()[0]
 
                 for sub_name, sub_share in sub_partners:
                     cursor.execute("INSERT INTO sub_partners (partner_id, sub_partner_name, share_percentage) VALUES (%s, %s, %s)",
@@ -130,9 +128,11 @@ def main():
             st.error(f"An error occurred: {e}")
 
         finally:
-            if conn.is_connected():
+            if cursor:
                 cursor.close()
+            if conn:
                 conn.close()
+
 
 if __name__ == "__main__":
     main()

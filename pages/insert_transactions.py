@@ -1,17 +1,24 @@
 import streamlit as st
-import mysql.connector
+import psycopg2
+from psycopg2.extras import RealDictCursor
 from datetime import date
-
 
 # ---------- DB Setup ----------
 
-def calculate_auto_split(conn, project_id, total_amount, paid_by):
-    cursor = conn.cursor(dictionary=True)
+def get_db_connection():
+    return psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["database"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
+    )
 
-    # Fetch all partners and their shares
+def calculate_auto_split(conn, project_id, total_amount, paid_by):
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
     cursor.execute("SELECT partner_id, partner_name, share_percentage FROM partners WHERE project_id = %s", (project_id,))
     partners = cursor.fetchall()
-   
+
     effective_shares = {}
 
     for partner in partners:
@@ -19,95 +26,63 @@ def calculate_auto_split(conn, project_id, total_amount, paid_by):
         pname = partner["partner_name"]
         pshare = float(partner["share_percentage"])
 
-        # Check sub-partners under each partner
         cursor.execute("SELECT sub_partner_name, share_percentage FROM sub_partners WHERE partner_id = %s", (partner_id,))
         sub_partners = cursor.fetchall()
 
         if not sub_partners:
             effective_shares[pname] = round(pshare, 2)
         else:
-            
             sub_partners_share_total = 0
             for sub in sub_partners:
                 sname = sub["sub_partner_name"]
                 sshare = float(sub["share_percentage"])
-                sub_partners_share_total = sub_partners_share_total + sshare
+                sub_partners_share_total += sshare
                 effective_shares[sname] = round(pshare * sshare / 100, 2)
-            effective_shares[pname] = (100-sub_partners_share_total)*(round(pshare, 2))/100
+            effective_shares[pname] = round((100 - sub_partners_share_total) * pshare / 100, 2)
 
-
-            # after each sub partner 
-
-    # Calculate what each member owes
-   
-    
     owed_amounts = {name: round(share * total_amount / 100, 2) for name, share in effective_shares.items()}
-
-    # Remove the payer
-    # if paid_by in owed_amounts:
-    #     del owed_amounts[paid_by]
-
-  
-
-    # Final payments: Who pays the payer and how much
     payments = [{"payer": name, "receiver": paid_by, "amount": amount} for name, amount in owed_amounts.items()]
-
-
-
-
+    
     cursor.close()
     return payments, effective_shares, owed_amounts
 
-
-def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
-    )
-    
 def create_transaction_tables():
     conn = get_db_connection()
     cursor = conn.cursor()
 
-    # Transactions Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transactions (
-            transaction_id INT AUTO_INCREMENT PRIMARY KEY,
-            project_id INT,
-            transaction_type ENUM('investment', 'expense'),
+            transaction_id SERIAL PRIMARY KEY,
+            project_id INTEGER,
+            transaction_type VARCHAR(20) CHECK (transaction_type IN ('investment', 'expense')),
             paid_by VARCHAR(255),
-            amount DECIMAL(10,2),
+            amount NUMERIC(10,2),
             transaction_date DATE,
-            mode ENUM('cash', 'online'),
+            mode VARCHAR(20) CHECK (mode IN ('cash', 'online')),
             purpose TEXT,
-            split_type ENUM('auto', 'custom'),
+            split_type VARCHAR(20) CHECK (split_type IN ('auto', 'custom')),
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
         );
     """)
 
-    # Splits Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transaction_splits (
-            split_id INT AUTO_INCREMENT PRIMARY KEY,
-            transaction_id INT,
+            split_id SERIAL PRIMARY KEY,
+            transaction_id INTEGER,
             payer_name VARCHAR(255),
             receiver_name VARCHAR(255),
-            amount DECIMAL(10,2),
+            amount NUMERIC(10,2),
             FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE
         );
     """)
 
-    # Attachments Table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS transaction_attachments (
-            attachment_id INT AUTO_INCREMENT PRIMARY KEY,
-            transaction_id INT,
+            attachment_id SERIAL PRIMARY KEY,
+            transaction_id INTEGER,
             file_name VARCHAR(255),
-            file_data LONGBLOB,
+            file_data BYTEA,
             description TEXT,
             FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE
         );
@@ -190,18 +165,11 @@ def main():
 
     elif split_type == "share as per ownership":
         payments, shares, owed_amounts = calculate_auto_split(get_db_connection(), project_id, amount, paid_by)
-   
-
         st.subheader("Auto-calculated splits:")
         for payment in payments:
             st.markdown(f"**{payment['payer']}** will pay **₹{payment['amount']}** to **{payment['receiver']}**")
-        for key,value in owed_amounts.items():
+        for key, value in owed_amounts.items():
             splits.append((paid_by, key, value))
-
-    
-    
-        # st.info("Automatic split based on ownership structure will be added in the next version.")
-        # To be implemented next
 
     uploaded_files = st.file_uploader("Attach Files", type=["pdf", "jpg", "jpeg"], accept_multiple_files=True)
     file_descriptions = {}
@@ -214,38 +182,36 @@ def main():
             conn = get_db_connection()
             cursor = conn.cursor()
 
-            # Insert transaction
+            # Insert transaction and get its ID
             cursor.execute("""
-                           INSERT INTO transactions (project_id, transaction_type, paid_by, amount, transaction_date,
-                                                     mode, purpose, split_type)
-                           VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                           """, (
-                               project_id, transaction_type, paid_by, amount, transaction_date, mode, purpose,
-                               'auto'
-                           ))
-            transaction_id = cursor.lastrowid
+                INSERT INTO transactions (project_id, transaction_type, paid_by, amount, transaction_date,
+                                          mode, purpose, split_type)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING transaction_id
+            """, (
+                project_id, transaction_type, paid_by, amount, transaction_date, mode, purpose,
+                'auto' if split_type == "share as per ownership" else 'custom'
+            ))
+            transaction_id = cursor.fetchone()[0]
 
-            # Insert splits (example for auto-split logic - assume `splits` is a list of tuples)
-            # splits = [(payer_name, receiver_name, amount), ...]
             for payer, receiver, split_amt in splits:
                 cursor.execute("""
-                               INSERT INTO transaction_splits (transaction_id, payer_name, receiver_name, amount)
-                               VALUES (%s, %s, %s, %s)
-                               """, (transaction_id, payer, receiver, split_amt))
+                    INSERT INTO transaction_splits (transaction_id, payer_name, receiver_name, amount)
+                    VALUES (%s, %s, %s, %s)
+                """, (transaction_id, payer, receiver, split_amt))
 
-            # Insert attachments
             for file in uploaded_files:
                 file_data = file.read()
-                desc = st.text_input(f"Description for {file.name}", key=f"desc_{file.name}")
+                desc = file_descriptions[file.name][1]
                 cursor.execute("""
-                               INSERT INTO transaction_attachments (transaction_id, file_name, file_data, description)
-                               VALUES (%s, %s, %s, %s)
-                               """, (transaction_id, file.name, file_data, desc))
+                    INSERT INTO transaction_attachments (transaction_id, file_name, file_data, description)
+                    VALUES (%s, %s, %s, %s)
+                """, (transaction_id, file.name, file_data, desc))
 
             conn.commit()
             st.success("✅ Transaction recorded successfully!")
 
-        except mysql.connector.Error as e:
+        except Exception as e:
             st.error(f"❌ Database error: {e}")
 
         finally:

@@ -1,17 +1,19 @@
 import streamlit as st
 import mysql.connector
 from collections import defaultdict
+import psycopg2
 
 # ---------- DB Connection ----------
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
+    conn = psycopg2.connect(
+                        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["database"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
     )
+    return conn
 
 # ---------- Fetch All Unique Names ----------
 

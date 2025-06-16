@@ -1,18 +1,23 @@
 import streamlit as st
-import mysql.connector
+import psycopg2
+from psycopg2.extras import RealDictCursor
+
+# ---------- Database Connection ----------
 
 def get_db_connection():
-    return mysql.connector.connect(
-        host=st.secrets["mysql"]["host"],
-        user=st.secrets["mysql"]["user"],
-        password=st.secrets["mysql"]["password"],
-        database=st.secrets["mysql"]["database"],
-        port=st.secrets["mysql"]["port"]
+    return psycopg2.connect(
+        host=st.secrets["postgres"]["host"],
+        database=st.secrets["postgres"]["database"],
+        user=st.secrets["postgres"]["user"],
+        password=st.secrets["postgres"]["password"],
+        port=st.secrets["postgres"]["port"]
     )
+
+# ---------- Ownership Tree Viewer ----------
 
 def display_ownership_tree(project_id):
     conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    cursor = conn.cursor(cursor_factory=RealDictCursor)
 
     cursor.execute("SELECT partner_id, partner_name, share_percentage FROM partners WHERE project_id = %s", (project_id,))
     partners = cursor.fetchall()
@@ -20,14 +25,18 @@ def display_ownership_tree(project_id):
     st.subheader("Ownership Tree")
     for partner in partners:
         st.markdown(f"🔵 **{partner['partner_name']}** - {partner['share_percentage']}%")
+        
         cursor.execute("SELECT sub_partner_name, share_percentage FROM sub_partners WHERE partner_id = %s", (partner['partner_id'],))
         sub_partners = cursor.fetchall()
+
         for sub in sub_partners:
             effective_share = round(partner['share_percentage'] * sub['share_percentage'] / 100, 2)
             st.markdown(f"&emsp;&emsp;🔹 **{sub['sub_partner_name']}** - {effective_share}% (of project)", unsafe_allow_html=True)
 
     cursor.close()
     conn.close()
+
+# ---------- Streamlit UI ----------
 
 def main():
     st.set_page_config(page_title="View Ownership Structure")
@@ -39,6 +48,7 @@ def main():
     cursor.execute("SELECT project_id, project_name FROM projects")
     projects = cursor.fetchall()
     project_dict = {name: pid for pid, name in projects}
+    
     cursor.close()
     conn.close()
 
