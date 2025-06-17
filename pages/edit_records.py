@@ -29,19 +29,24 @@ def fetch_combined_entries(project_id, page_size, offset):
     st_res = supabase.table("settlements") \
         .select("*") \
         .eq("project_id", project_id) \
-        .order("settled_at", desc=False) \
+        .order("created_at", desc=False) \
         .range(offset, offset + page_size - 1) \
         .execute()
     settlements = [{"type":"settlement", **row} for row in (st_res.data or [])]
 
     combined = transactions + settlements
-    combined.sort(key=lambda x: x["created_at" if x["type"]=="transaction" else "settled_at"], reverse=True)
+    combined.sort(key=lambda x: x["created_at"], reverse=True)
     return combined
 
 # --- Update a record dynamically ---
 def update_record(table, key_column, key_value, updates):
     resp = supabase.table(table).update(updates).eq(key_column, key_value).execute()
-    return resp.status_code == 200
+    if resp.data is None:
+    	return False
+    else:
+    	return True
+    
+    #return resp.status_code == 200
 
 # --- Main Streamlit ---
 def main():
@@ -66,14 +71,14 @@ def main():
         if entry["type"] == "transaction":
             header = f"Paid by: {entry['paid_by']} | ₹{entry['amount']} | {entry['created_at'][:10]}"
         else:
-            header = f"{entry['payer_name']} paid {entry['payee_name']} ₹{entry['amount']} on {entry['settled_at'][:10]}"
+            header = f"{entry['paid_by']} paid {entry['paid_to']} ₹{entry['amount']} on {entry['created_at'][:10]}"
 
         with st.expander(header):
             if entry["type"] == "transaction":
                 # Editable fields
                 upd = {
                     "paid_by": st.text_input("Paid By", entry["paid_by"], key=f"paid_by_t{entry['transaction_id']}"),
-                    "amount": st.number_input("Amount", float(entry["amount"]), key=f"amt_t{entry['transaction_id']}"),
+                    "amount": st.number_input(label = "Amount", value = float(entry["amount"]), min_value = 0.0, key=f"amt_t{entry['transaction_id']}"),
                     "mode": st.selectbox("Mode", ["cash", "online"], index=["cash", "online"].index(entry["mode"]), key=f"mode_t{entry['transaction_id']}"),
                     "purpose": st.text_area("Purpose", entry["purpose"], key=f"purp_t{entry['transaction_id']}"),
                     "split_type": st.selectbox("Split Type", ["auto", "custom"], index=["auto","custom"].index(entry["split_type"]), key=f"split_t{entry['transaction_id']}"),
@@ -82,20 +87,20 @@ def main():
                 if st.button("Update", key=f"btn_t{entry['transaction_id']}"):
                     if update_record("transactions", "transaction_id", entry["transaction_id"], upd):
                         st.success("✅ Updated successfully")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error("❌ Update failed")
             else:
                 upd = {
-                    "payer_name": st.text_input("Payer", entry["payer_name"], key=f"payr_s{entry['settlement_id']}"),
-                    "payee_name": st.text_input("Payee", entry["payee_name"], key=f"pyee_s{entry['settlement_id']}"),
-                    "amount": st.number_input("Amount", float(entry["amount"]), key=f"amt_s{entry['settlement_id']}"),
-                    "settled_at": st.date_input("Date", datetime.fromisoformat(entry["settled_at"]).date(), key=f"date_s{entry['settlement_id']}").isoformat()
+                    "paid_by": st.text_input("Payer", entry["paid_by"], key=f"payr_s{entry['settlement_id']}"),
+                    "paid_to": st.text_input("Payee", entry["paid_to"], key=f"pyee_s{entry['settlement_id']}"),
+                    "amount": st.number_input(label = "Amount", value = float(entry["amount"]),  min_value = 0.0, key=f"amt_s{entry['settlement_id']}"),
+                    "created_at": st.date_input("Date", datetime.fromisoformat(entry["created_at"]).date(), key=f"date_s{entry['settlement_id']}").isoformat()
                 }
                 if st.button("Update", key=f"btn_s{entry['settlement_id']}"):
                     if update_record("settlements", "settlement_id", entry["settlement_id"], upd):
                         st.success("✅ Updated successfully")
-                        st.experimental_rerun()
+                        st.rerun()
                     else:
                         st.error("❌ Update failed")
 
