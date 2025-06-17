@@ -77,10 +77,10 @@ def main():
 	    entries = fetch_combined_entries(project_id, page_size, offset)
 
 	    for entry in entries:
-		if entry["type"] == "transaction":
-		    header = f"Paid by: {entry['paid_by']} | ₹{entry['amount']} | {entry['created_at'][:10]}"
-		else:
-		    header = f"{entry['paid_by']} paid {entry['paid_to']} ₹{entry['amount']} on {entry['created_at'][:10]}"
+			if entry["type"] == "transaction":
+			    header = f"Paid by: {entry['paid_by']} | ₹{entry['amount']} | {entry['created_at'][:10]}"
+			else:
+			    header = f"{entry['paid_by']} paid {entry['paid_to']} ₹{entry['amount']} on {entry['created_at'][:10]}"
 
 		with st.expander(header):
 		    if entry["type"] == "transaction":
