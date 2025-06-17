@@ -57,6 +57,9 @@ def main():
     proj_res = supabase.table("projects").select("project_id,project_name").execute()
     projects = proj_res.data or []
     project_map = {p["project_name"]: p["project_id"] for p in projects}
+
+
+    st.write(project_map)
     if len(list(project_map.keys())) == 0:
     	st.write("No projects created yet")
     
