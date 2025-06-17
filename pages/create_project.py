@@ -1,75 +1,25 @@
 import streamlit as st
-import psycopg2
-from psycopg2 import Error
 from datetime import date
+from supabase import create_client, Client
+import base64
 
-# ---------- Database Setup ----------
+# ---------- Supabase Setup ----------
+st.set_page_config(page_title="Create Project")
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["anon_key"]
+    return create_client(url, key)
 
-def get_db_connection():
-    return psycopg2.connect(
-    
-        	host = "db.ogecahtzmpsznesragam.supabase.co",
-			port = 5432,
-			database = "postgres",
-			user = "postgres",
-			password = "vDKOd0VmurNGkYkJ"
-    )
-
-def create_tables():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS projects (
-            project_id SERIAL PRIMARY KEY,
-            project_name VARCHAR(255) UNIQUE NOT NULL,
-            description TEXT,
-            start_date DATE
-        );
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS partners (
-            partner_id SERIAL PRIMARY KEY,
-            project_id INTEGER,
-            partner_name VARCHAR(255),
-            share_percentage NUMERIC(5,2),
-            FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-        );
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS sub_partners (
-            sub_partner_id SERIAL PRIMARY KEY,
-            partner_id INTEGER,
-            sub_partner_name VARCHAR(255),
-            share_percentage NUMERIC(5,2),
-            FOREIGN KEY (partner_id) REFERENCES partners(partner_id) ON DELETE CASCADE
-        );
-    """)
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS attachments (
-            attachment_id SERIAL PRIMARY KEY,
-            project_id INTEGER,
-            file_name VARCHAR(255),
-            file_data BYTEA,
-            description TEXT,
-            FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-        );
-    """)
-
-    conn.commit()
-    cursor.close()
-    conn.close()
+supabase = get_supabase_client()
 
 # ---------- Streamlit UI ----------
 
 def main():
-    st.set_page_config(page_title="Create Project")
+    
     st.title("Create a New Project")
 
-    create_tables()
+    # st.info("⚠️ Make sure all required tables are already created in Supabase schema.")
 
     project_name = st.text_input("Project Name")
     description = st.text_area("Project Description")
@@ -101,39 +51,54 @@ def main():
 
     if st.button("Create Project"):
         try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
+            
+            # Insert into projects table
+            project_res = supabase.table("projects").insert({
+                "project_name": project_name,
+                "description": description,
+                "start_date": start_date.isoformat()
+            }).execute()
 
-            cursor.execute("INSERT INTO projects (project_name, description, start_date) VALUES (%s, %s, %s) RETURNING project_id;",
-                           (project_name, description, start_date))
-            project_id = cursor.fetchone()[0]
+            if project_res.data is None:
+                raise Exception(f"Insert failed. Response: {project_res}")
 
+
+            project_id = project_res.data[0]["project_id"]
+
+            # Insert partners and sub-partners
             for partner_name, share, sub_partners in partners_data:
-                cursor.execute("INSERT INTO partners (project_id, partner_name, share_percentage) VALUES (%s, %s, %s) RETURNING partner_id;",
-                               (project_id, partner_name, share))
-                partner_id = cursor.fetchone()[0]
+                partner_res = supabase.table("partners").insert({
+                    "project_id": project_id,
+                    "partner_name": partner_name,
+                    "share_percentage": share
+                }).execute()
+
+
+                if partner_res.data is None:
+                    raise Exception(f"Failed to create partner: {partner_res}")
+
+                partner_id = partner_res.data[0]["partner_id"]
 
                 for sub_name, sub_share in sub_partners:
-                    cursor.execute("INSERT INTO sub_partners (partner_id, sub_partner_name, share_percentage) VALUES (%s, %s, %s)",
-                                   (partner_id, sub_name, sub_share))
+                    supabase.table("sub_partners").insert({
+                        "partner_id": partner_id,
+                        "sub_partner_name": sub_name,
+                        "share_percentage": sub_share
+                    }).execute()
 
+            # Insert attachments (note: Supabase REST API can't directly store binary data in BYTEA)
             for fname, (file, desc) in file_descriptions.items():
-                file_data = file.read()
-                cursor.execute("INSERT INTO attachments (project_id, file_name, file_data, description) VALUES (%s, %s, %s, %s)",
-                               (project_id, fname, file_data, desc))
+                encoded_data = base64.b64encode(file.read()).decode("utf-8")  # Convert bytes to base64 string
+                supabase.table("attachments").insert({
+                    "project_id": project_id,
+                    "file_name": fname,
+                    "file_data": encoded_data,
+                    "description": desc
+                }).execute()
 
-            conn.commit()
-            st.success("Project created successfully!")
+            st.success("✅ Project created successfully!")
 
-        except Error as e:
-            st.error(f"An error occurred: {e}")
-
-        finally:
-            if cursor:
-                cursor.close()
-            if conn:
-                conn.close()
-
-
+        except Exception as e:
+            st.error(f"❌ An error occurred: {e}")
 if __name__ == "__main__":
     main()

@@ -1,222 +1,123 @@
 import streamlit as st
-import psycopg2
-from psycopg2.extras import RealDictCursor
 from datetime import date
+from supabase import create_client, Client
 
-# ---------- DB Setup ----------
 
-def get_db_connection():
-    return psycopg2.connect(
-        host=st.secrets["postgres"]["host"],
-        database=st.secrets["postgres"]["database"],
-        user=st.secrets["postgres"]["user"],
-        password=st.secrets["postgres"]["password"],
-        port=st.secrets["postgres"]["port"]
-    )
+st.set_page_config(page_title="Insert Transaction")
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["anon_key"]
+    return create_client(url, key)
 
-def calculate_auto_split(conn, project_id, total_amount, paid_by):
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-    cursor.execute("SELECT partner_id, partner_name, share_percentage FROM partners WHERE project_id = %s", (project_id,))
-    partners = cursor.fetchall()
+supabase = get_supabase_client()
 
+# -------- Split Calculation Logic --------
+
+def calculate_auto_split(project_id, total_amount, paid_by):
+    data = supabase.table("partners").select("*").eq("project_id", project_id).execute().data or []
     effective_shares = {}
-
-    for partner in partners:
-        partner_id = partner["partner_id"]
-        pname = partner["partner_name"]
-        pshare = float(partner["share_percentage"])
-
-        cursor.execute("SELECT sub_partner_name, share_percentage FROM sub_partners WHERE partner_id = %s", (partner_id,))
-        sub_partners = cursor.fetchall()
-
-        if not sub_partners:
+    for p in data:
+        pid, pname, pshare = p["partner_id"], p["partner_name"], float(p["share_percentage"])
+        subs = supabase.table("sub_partners").select("*").eq("partner_id", pid).execute().data or []
+        if not subs:
             effective_shares[pname] = round(pshare, 2)
         else:
-            sub_partners_share_total = 0
-            for sub in sub_partners:
-                sname = sub["sub_partner_name"]
-                sshare = float(sub["share_percentage"])
-                sub_partners_share_total += sshare
-                effective_shares[sname] = round(pshare * sshare / 100, 2)
-            effective_shares[pname] = round((100 - sub_partners_share_total) * pshare / 100, 2)
+            sub_total = sum(float(s["share_percentage"]) for s in subs)
+            for s in subs:
+                effective_shares[s["sub_partner_name"]] = round(pshare * float(s["share_percentage"]) / 100, 2)
+            effective_shares[pname] = round((100 - sub_total) * pshare / 100, 2)
 
-    owed_amounts = {name: round(share * total_amount / 100, 2) for name, share in effective_shares.items()}
-    payments = [{"payer": name, "receiver": paid_by, "amount": amount} for name, amount in owed_amounts.items()]
+    owed = {n: round(sh * total_amount / 100, 2) for n, sh in effective_shares.items()}
+    payments = [{"payer": n, "receiver": paid_by, "amount": amt} for n, amt in owed.items()]
+    return payments, effective_shares, owed
+
+# -------- CRUD Utility --------
+
+def insert(table: str, data: dict):
+    return supabase.table(table).insert(data).execute()
+
+def get_stakeholders(project_id):
+    # Step 1: Get partners for the project
+    partners_resp = supabase.table("partners").select("partner_id, partner_name").eq("project_id", project_id).execute()
+    partners = partners_resp.data or []
     
-    cursor.close()
-    return payments, effective_shares, owed_amounts
+    partner_ids = [p["partner_id"] for p in partners]
+    partner_names = [p["partner_name"] for p in partners]
 
-def create_transaction_tables():
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    # Step 2: Get sub-partners for those partner_ids
+    subs_resp = supabase.table("sub_partners").select("sub_partner_name, partner_id").execute()
+    subs_all = subs_resp.data or []
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            transaction_id SERIAL PRIMARY KEY,
-            project_id INTEGER,
-            transaction_type VARCHAR(20) CHECK (transaction_type IN ('investment', 'expense')),
-            paid_by VARCHAR(255),
-            amount NUMERIC(10,2),
-            transaction_date DATE,
-            mode VARCHAR(20) CHECK (mode IN ('cash', 'online')),
-            purpose TEXT,
-            split_type VARCHAR(20) CHECK (split_type IN ('auto', 'custom')),
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-        );
-    """)
+    sub_names = [s["sub_partner_name"] for s in subs_all if s["partner_id"] in partner_ids]
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transaction_splits (
-            split_id SERIAL PRIMARY KEY,
-            transaction_id INTEGER,
-            payer_name VARCHAR(255),
-            receiver_name VARCHAR(255),
-            amount NUMERIC(10,2),
-            FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE
-        );
-    """)
+    return partner_names + sub_names
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS transaction_attachments (
-            attachment_id SERIAL PRIMARY KEY,
-            transaction_id INTEGER,
-            file_name VARCHAR(255),
-            file_data BYTEA,
-            description TEXT,
-            FOREIGN KEY (transaction_id) REFERENCES transactions(transaction_id) ON DELETE CASCADE
-        );
-    """)
-
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-# ---------- Data Fetch Helpers ----------
-
-def fetch_projects():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT project_id, project_name FROM projects")
-    projects = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return projects
-
-def fetch_all_stakeholders(project_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT partner_name FROM partners WHERE project_id = %s", (project_id,))
-    partners = [row[0] for row in cursor.fetchall()]
-
-    cursor.execute("""
-        SELECT sp.sub_partner_name FROM sub_partners sp
-        JOIN partners p ON sp.partner_id = p.partner_id
-        WHERE p.project_id = %s
-    """, (project_id,))
-    subpartners = [row[0] for row in cursor.fetchall()]
-
-    cursor.close()
-    conn.close()
-    return partners + subpartners
-
-# ---------- Main Streamlit App ----------
+# -------- Streamlit App --------
 
 def main():
-    st.set_page_config(page_title="Insert Transaction")
+    
     st.title("Insert a Transaction")
-    create_transaction_tables()
 
-    projects = fetch_projects()
-    if not projects:
-        st.warning("No projects found. Please create a project first.")
+    projs = supabase.table("projects").select("project_id,project_name").execute().data or []
+    if not projs:
+        st.warning("Create a project first.")
         return
 
-    project_name_to_id = {name: pid for pid, name in projects}
-    selected_project = st.selectbox("Select Project", list(project_name_to_id.keys()))
-    if not selected_project:
-        st.stop()
+    pmap = {p["project_name"]: p["project_id"] for p in projs}
+    sel = st.selectbox("Select Project", list(pmap.keys()))
+    pid = pmap[sel]
 
-    project_id = project_name_to_id[selected_project]
-    stakeholders = fetch_all_stakeholders(project_id)
-    transaction_date = st.date_input("Transaction Date", date.today())
-    transaction_type = st.selectbox("Transaction Type", ["investment", "expense"])
+    stakeholders = get_stakeholders(pid)
+    txn_date = st.date_input("Transaction Date", date.today())
+    txn_type = st.selectbox("Transaction Type", ["investment", "expense"])
     paid_by = st.selectbox("Paid By", stakeholders)
-    amount = st.number_input("Amount", min_value=0.0, step=0.01)
-    mode = st.selectbox("Mode of Payment", ["cash", "online"])
-    purpose = st.text_area("Purpose of Transaction")
-    split_type = st.radio("How to split?", ["share as per ownership", "custom"])
-    created_at = date.today()
+    amount = st.number_input("Amount", 0.0, format="%.2f")
+    mode = st.selectbox("Mode", ["cash", "online"])
+    purpose = st.text_area("Purpose")
+    split_type = st.radio("Split Type", ["share as per ownership", "custom"])
 
     splits = []
-
     if split_type == "custom":
         st.markdown("### Custom Split")
-        owed_amount_total = 0
-        for name in stakeholders:
-            owed = st.number_input(f"{name} owes", min_value=0.0, step=0.01, key=f"custom_{name}")
-            if owed > 0:
-                splits.append((paid_by, name, owed))
-                owed_amount_total += owed
+        total = 0
+        for s in stakeholders:
+            owe = st.number_input(f"{s} owes", 0.0, format="%.2f", key=s)
+            if owe > 0:
+                splits.append((paid_by, s, owe))
+                total += owe
+        if round(total, 2) != round(amount, 2):
+            st.warning("Total owes doesn't match paid amount.")
+    else:
+        payments, shares, owed = calculate_auto_split(pid, amount, paid_by)
+        st.subheader("Auto-Calculated Split:")
+        for pay in payments:
+            st.markdown(f"**{pay['payer']}** → ₹{pay['amount']} → **{pay['receiver']}**")
+        for n, amt in owed.items():
+            splits.append((paid_by, n, amt))
 
-        if round(owed_amount_total, 2) != round(amount, 2):
-            st.warning("⚠️ Total owed doesn't match the amount paid!")
-
-    elif split_type == "share as per ownership":
-        payments, shares, owed_amounts = calculate_auto_split(get_db_connection(), project_id, amount, paid_by)
-        st.subheader("Auto-calculated splits:")
-        for payment in payments:
-            st.markdown(f"**{payment['payer']}** will pay **₹{payment['amount']}** to **{payment['receiver']}**")
-        for key, value in owed_amounts.items():
-            splits.append((paid_by, key, value))
-
-    uploaded_files = st.file_uploader("Attach Files", type=["pdf", "jpg", "jpeg"], accept_multiple_files=True)
-    file_descriptions = {}
-    for file in uploaded_files:
-        desc = st.text_input(f"Description for {file.name}", key=f"desc_{file.name}")
-        file_descriptions[file.name] = (file, desc)
+    att = st.file_uploader("Attach Files", ["pdf","jpg","jpeg"], accept_multiple_files=True)
+    file_desc = {f.name: st.text_input(f"Desc for {f.name}", key=f.name) for f in att}
 
     if st.button("Submit Transaction"):
-        try:
-            conn = get_db_connection()
-            cursor = conn.cursor()
-
-            # Insert transaction and get its ID
-            cursor.execute("""
-                INSERT INTO transactions (project_id, transaction_type, paid_by, amount, transaction_date,
-                                          mode, purpose, split_type)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-                RETURNING transaction_id
-            """, (
-                project_id, transaction_type, paid_by, amount, transaction_date, mode, purpose,
-                'auto' if split_type == "share as per ownership" else 'custom'
-            ))
-            transaction_id = cursor.fetchone()[0]
-
-            for payer, receiver, split_amt in splits:
-                cursor.execute("""
-                    INSERT INTO transaction_splits (transaction_id, payer_name, receiver_name, amount)
-                    VALUES (%s, %s, %s, %s)
-                """, (transaction_id, payer, receiver, split_amt))
-
-            for file in uploaded_files:
-                file_data = file.read()
-                desc = file_descriptions[file.name][1]
-                cursor.execute("""
-                    INSERT INTO transaction_attachments (transaction_id, file_name, file_data, description)
-                    VALUES (%s, %s, %s, %s)
-                """, (transaction_id, file.name, file_data, desc))
-
-            conn.commit()
-            st.success("✅ Transaction recorded successfully!")
-
-        except Exception as e:
-            st.error(f"❌ Database error: {e}")
-
-        finally:
-            cursor.close()
-            conn.close()
+        tx = insert("transactions", {
+            "project_id": pid, "transaction_type": txn_type, "paid_by": paid_by,
+            "amount": amount, "transaction_date": txn_date.isoformat(),
+            "mode": mode, "purpose": purpose,
+            "split_type": "auto" if split_type=="share as per ownership" else "custom"
+        })
+        tid = tx.data[0]["transaction_id"]
+        for payer, recv, amt in splits:
+            insert("transaction_splits", {
+                "transaction_id": tid, "payer_name": payer, "receiver_name": recv, "amount": amt
+            })
+        for f in att:
+            data_enc = f.read().decode("utf-8")
+            insert("transaction_attachments", {
+                "transaction_id": tid, "file_name": f.name, "file_data": data_enc,
+                "description": file_desc[f.name]
+            })
+        st.success("Transaction recorded!")
 
 if __name__ == "__main__":
     main()

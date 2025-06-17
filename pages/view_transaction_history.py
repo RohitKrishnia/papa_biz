@@ -1,83 +1,56 @@
 import streamlit as st
 import pandas as pd
-import psycopg2
+from supabase import create_client, Client
 
-# ---------- DB Connection ----------
+# ---------- Supabase Setup ----------
+st.set_page_config(page_title="Project Transactions & Settlements")
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["anon_key"]
+    return create_client(url, key)
 
-def get_db_connection():
-    conn = psycopg2.connect(
-        host=st.secrets["postgres"]["host"],
-        database=st.secrets["postgres"]["database"],
-        user=st.secrets["postgres"]["user"],
-        password=st.secrets["postgres"]["password"],
-        port=st.secrets["postgres"]["port"]
-    )
-    return conn
-
+supabase = get_supabase_client()
 # ---------- Fetch Project List ----------
 
 def get_projects():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT project_name FROM projects")
-    projects = [row[0] for row in cursor.fetchall()]
-    cursor.close()
-    conn.close()
-    return projects
+    res = supabase.table("projects").select("project_name").execute()
+    return [row["project_name"] for row in res.data or []]
 
 # ---------- Fetch Transactions ----------
 
 def get_transactions(project_name):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT project_id FROM projects WHERE project_name = %s", (project_name,))
-    row = cursor.fetchone()
-    if not row:
-        cursor.close()
-        conn.close()
+    res = supabase.table("projects").select("project_id").eq("project_name", project_name).execute()
+    if not res.data:
         return [], None
+    project_id = res.data[0]["project_id"]
 
-    project_id = row[0]
+    tx_res = (
+        supabase.table("transactions")
+        .select("transaction_type, paid_by, amount, mode, purpose, split_type, created_at")
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
 
-    cursor.execute("""
-        SELECT transaction_type, paid_by, amount, mode, purpose, split_type, created_at
-        FROM transactions
-        WHERE project_id = %s
-        ORDER BY created_at DESC
-    """, (project_id,))
-    rows = cursor.fetchall()
-    colnames = [desc[0] for desc in cursor.description]
-    transactions = [dict(zip(colnames, r)) for r in rows]
-
-    cursor.close()
-    conn.close()
-    return transactions, project_id
+    return tx_res.data or [], project_id
 
 # ---------- Fetch Settlements ----------
 
 def get_settlements(project_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        SELECT paid_by, paid_to, amount, created_at
-        FROM settlements
-        WHERE project_id = %s
-        ORDER BY created_at DESC
-    """, (project_id,))
-    rows = cursor.fetchall()
-    colnames = [desc[0] for desc in cursor.description]
-    settlements = [dict(zip(colnames, r)) for r in rows]
-
-    cursor.close()
-    conn.close()
-    return settlements
+    res = (
+        supabase.table("settlements")
+        .select("paid_by, paid_to, amount, created_at")
+        .eq("project_id", project_id)
+        .order("created_at", desc=True)
+        .execute()
+    )
+    return res.data or []
 
 # ---------- Streamlit UI ----------
 
 def main():
-    st.set_page_config(page_title="Project Transactions & Settlements")
+    
     st.title("📜 View Transaction History & Settlements")
 
     projects = get_projects()

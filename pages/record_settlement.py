@@ -1,94 +1,70 @@
 import streamlit as st
 from datetime import date
-import psycopg2
+from supabase import create_client, Client
 
-# ---------- DB Connection ----------
+# ---------- Supabase Setup ----------
 
-def get_db_connection():
-    conn = psycopg2.connect(
-        host=st.secrets["postgres"]["host"],
-        database=st.secrets["postgres"]["database"],
-        user=st.secrets["postgres"]["user"],
-        password=st.secrets["postgres"]["password"],
-        port=st.secrets["postgres"]["port"]
-    )
-    return conn
+st.set_page_config(page_title="Insert Transaction")
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["anon_key"]
+    return create_client(url, key)
 
-# ---------- Create Table If Not Exists ----------
+supabase = get_supabase_client()
 
-def create_settlement_table():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS settlements (
-            settlement_id SERIAL PRIMARY KEY,
-            project_id INT,
-            paid_by VARCHAR(255),
-            paid_to VARCHAR(255),
-            amount DECIMAL(10, 2),
-            mode VARCHAR(20) CHECK (mode IN ('cash', 'online')),
-            remarks TEXT,
-            date DATE,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (project_id) REFERENCES projects(project_id) ON DELETE CASCADE
-        );
-    """)
-
-    conn.commit()
-    cursor.close()
-    conn.close()
-
-# ---------- Fetch Helpers ----------
+# ---------- Fetch Projects ----------
 
 def get_projects():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT project_id, project_name FROM projects")
-    data = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return [{"project_id": row[0], "project_name": row[1]} for row in data]
+    response = supabase.table("projects").select("project_id, project_name").execute()
+    return [
+        {"project_id": p["project_id"], "project_name": p["project_name"]}
+        for p in response.data or []
+    ]
+
+# ---------- Fetch Participants (Partners + Sub-Partners) ----------
 
 def get_all_participants(project_id):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    query = """
-        SELECT partner_name FROM partners WHERE project_id = %s
-        UNION
-        SELECT sp.sub_partner_name
-        FROM sub_partners sp
-        JOIN partners p ON p.partner_id = sp.partner_id
-        WHERE p.project_id = %s
-    """
-    cursor.execute(query, (project_id, project_id))
-    names = [row[0] for row in cursor.fetchall()]
-    cursor.close()
-    conn.close()
-    return names
+    # Fetch partners
+    partners_resp = (
+        supabase.table("partners")
+        .select("partner_id, partner_name")
+        .eq("project_id", project_id)
+        .execute()
+    )
+    partner_ids = {p["partner_id"] for p in partners_resp.data or []}
+    partner_names = [p["partner_name"] for p in partners_resp.data or []]
 
-# ---------- Insert Payment ----------
+    # Fetch sub-partners (client-side join)
+    sub_partners_resp = supabase.table("sub_partners").select("sub_partner_name, partner_id").execute()
+    sub_partner_names = [
+        sp["sub_partner_name"]
+        for sp in sub_partners_resp.data or []
+        if sp["partner_id"] in partner_ids
+    ]
+
+    return list(set(partner_names + sub_partner_names))
+
+# ---------- Insert Settlement ----------
 
 def record_payment(project_id, payer, payee, amount, mode, note, settlement_date):
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    response = supabase.table("settlements").insert({
+        "project_id": project_id,
+        "paid_by": payer,
+        "paid_to": payee,
+        "amount": amount,
+        "mode": mode,
+        "remarks": note,
+        "date": settlement_date.isoformat()
+    }).execute()
 
-    cursor.execute("""
-        INSERT INTO settlements (project_id, paid_by, paid_to, amount, mode, remarks, date)
-        VALUES (%s, %s, %s, %s, %s, %s, %s)
-    """, (project_id, payer, payee, amount, mode, note, settlement_date))
-
-    conn.commit()
-    cursor.close()
-    conn.close()
+    if response.data is None:
+        raise Exception(f"Failed to insert record: {response}")
 
 # ---------- Streamlit UI ----------
 
 def main():
-    st.set_page_config(page_title="Record Settlement")
     st.title("💸 Record a Settlement Payment")
-
-    create_settlement_table()
 
     projects = get_projects()
     if not projects:
@@ -114,11 +90,15 @@ def main():
     note = st.text_area("Optional Note")
 
     if st.button("Record Payment"):
-        if amount == 0:
+        if amount <= 0:
             st.error("Amount must be greater than 0.")
         else:
-            record_payment(project_id, payer, payee, amount, mode, note, settlement_date)
-            st.success(f"Recorded payment of ₹{amount} from {payer} to {payee}")
+            try:
+                record_payment(project_id, payer, payee, amount, mode, note, settlement_date)
+                st.success(f"✅ Recorded payment of ₹{amount} from {payer} to {payee}")
+            except Exception as e:
+                st.error(f"❌ Failed to record payment: {str(e)}")
 
 if __name__ == "__main__":
     main()
+

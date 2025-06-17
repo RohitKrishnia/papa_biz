@@ -1,58 +1,58 @@
 import streamlit as st
-import psycopg2
-from psycopg2.extras import RealDictCursor
+from supabase import create_client, Client
 
-# ---------- Database Connection ----------
+# ---------- Supabase Setup ----------
 
-def get_db_connection():
-    return psycopg2.connect(
-        host=st.secrets["postgres"]["host"],
-        database=st.secrets["postgres"]["database"],
-        user=st.secrets["postgres"]["user"],
-        password=st.secrets["postgres"]["password"],
-        port=st.secrets["postgres"]["port"]
-    )
+st.set_page_config(page_title="Insert Transaction")
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["anon_key"]
+    return create_client(url, key)
 
+supabase = get_supabase_client()
 # ---------- Ownership Tree Viewer ----------
 
 def display_ownership_tree(project_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(cursor_factory=RealDictCursor)
-
-    cursor.execute("SELECT partner_id, partner_name, share_percentage FROM partners WHERE project_id = %s", (project_id,))
-    partners = cursor.fetchall()
+    partners_resp = supabase.table("partners") \
+        .select("partner_id, partner_name, share_percentage") \
+        .eq("project_id", project_id) \
+        .execute()
 
     st.subheader("Ownership Tree")
-    for partner in partners:
-        st.markdown(f"🔵 **{partner['partner_name']}** - {partner['share_percentage']}%")
-        
-        cursor.execute("SELECT sub_partner_name, share_percentage FROM sub_partners WHERE partner_id = %s", (partner['partner_id'],))
-        sub_partners = cursor.fetchall()
 
-        for sub in sub_partners:
-            effective_share = round(partner['share_percentage'] * sub['share_percentage'] / 100, 2)
+    if not partners_resp.data:
+        st.info("No partners found for this project.")
+        return
+
+    for partner in partners_resp.data:
+        partner_id = partner["partner_id"]
+        partner_name = partner["partner_name"]
+        partner_share = partner["share_percentage"]
+        st.markdown(f"🔵 **{partner_name}** - {partner_share}%")
+
+        sub_resp = supabase.table("sub_partners") \
+            .select("sub_partner_name, share_percentage") \
+            .eq("partner_id", partner_id) \
+            .execute()
+
+        for sub in sub_resp.data or []:
+            effective_share = round(partner_share * sub["share_percentage"] / 100, 2)
             st.markdown(f"&emsp;&emsp;🔹 **{sub['sub_partner_name']}** - {effective_share}% (of project)", unsafe_allow_html=True)
-
-    cursor.close()
-    conn.close()
 
 # ---------- Streamlit UI ----------
 
 def main():
-    st.set_page_config(page_title="View Ownership Structure")
-    st.title("Project Ownership Viewer")
+    st.title("📊 Project Ownership Viewer")
 
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    project_resp = supabase.table("projects").select("project_id, project_name").execute()
+    if not project_resp.data:
+        st.warning("No projects found.")
+        return
 
-    cursor.execute("SELECT project_id, project_name FROM projects")
-    projects = cursor.fetchall()
-    project_dict = {name: pid for pid, name in projects}
-    
-    cursor.close()
-    conn.close()
-
+    project_dict = {proj["project_name"]: proj["project_id"] for proj in project_resp.data}
     selected_project = st.selectbox("Select a Project", list(project_dict.keys()))
+
     if selected_project:
         display_ownership_tree(project_dict[selected_project])
 

@@ -1,129 +1,103 @@
 import streamlit as st
-import mysql.connector
-from mysql.connector import Error
+from supabase import create_client, Client
+from collections import defaultdict
 from datetime import datetime
-import psycopg2
 
-def get_db_connection():
-    conn = psycopg2.connect(
-                        host="db.ogecahtzmpsznesragam.supabase.co",
-                        database="postgres",
-                        user="postgres",
-                        password="vDKOd0VmurNGkYkJ",
-                        port=5432
-    )
-    return conn
+    
+st.set_page_config(page_title="Edit Transactions & Settlements")
+# --- Setup Supabase Client ---
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["anon_key"]
+    return create_client(url, key)
 
-def fetch_combined_entries(project_id):
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+supabase = get_supabase_client()
 
-    cursor.execute("""
-        SELECT 'transaction' AS type, transaction_id AS id, created_at, paid_by, amount, mode, purpose, split_type
-        FROM transactions WHERE project_id = %s
-    """, (project_id,))
-    transactions = cursor.fetchall()
+# --- Fetch combined entries ---
+def fetch_combined_entries(project_id, page_size, offset):
+    # Fetch transactions
+    tx_res = supabase.table("transactions") \
+        .select("*") \
+        .eq("project_id", project_id) \
+        .order("created_at", desc=False) \
+        .range(offset, offset + page_size - 1) \
+        .execute()
+    transactions = [{"type":"transaction", **row} for row in (tx_res.data or [])]
 
-    cursor.execute("""
-        SELECT 'settlement' AS type, settlement_id AS id, settled_at AS created_at, payer_name, payee_name, amount
-        FROM settlements WHERE project_id = %s
-    """, (project_id,))
-    settlements = cursor.fetchall()
+    # Fetch settlements
+    st_res = supabase.table("settlements") \
+        .select("*") \
+        .eq("project_id", project_id) \
+        .order("settled_at", desc=False) \
+        .range(offset, offset + page_size - 1) \
+        .execute()
+    settlements = [{"type":"settlement", **row} for row in (st_res.data or [])]
 
     combined = transactions + settlements
-    combined.sort(key=lambda x: x['created_at'], reverse=True)
-
-    cursor.close()
-    conn.close()
+    combined.sort(key=lambda x: x["created_at" if x["type"]=="transaction" else "settled_at"], reverse=True)
     return combined
 
+# --- Update a record dynamically ---
+def update_record(table, key_column, key_value, updates):
+    resp = supabase.table(table).update(updates).eq(key_column, key_value).execute()
+    return resp.status_code == 200
 
+# --- Main Streamlit ---
 def main():
-    st.set_page_config(page_title="Edit Transactions & Settlements")
-    st.title("Edit Transactions and Settlements")
+    
+    st.title("Edit Transactions & Settlements")
 
-    conn = get_db_connection()
-    cursor = conn.cursor(dictionary=True)
+    # Fetch project list
+    proj_res = supabase.table("projects").select("project_id,project_name").execute()
+    projects = proj_res.data or []
+    project_map = {p["project_name"]: p["project_id"] for p in projects}
 
-    cursor.execute("SELECT project_id, project_name FROM projects")
-    projects = cursor.fetchall()
-    project_map = {proj["project_name"]: proj["project_id"] for proj in projects}
+    selected = st.selectbox("Select Project", list(project_map.keys()))
+    project_id = project_map[selected]
 
-    selected_project_name = st.selectbox("Select Project", list(project_map.keys()))
-    selected_project_id = project_map[selected_project_name]
-
-    # --- Pagination ---
     page_size = 10
-    page_number = st.number_input("Page Number", min_value=1, step=1, value=1)
+    page_no = st.number_input("Page Number", min_value=1, value=1)
+    offset = (page_no - 1) * page_size
 
-    offset = (page_number - 1) * page_size
+    entries = fetch_combined_entries(project_id, page_size, offset)
 
-    # --- Fetch Transactions ---
-    cursor.execute("""
-        SELECT * FROM transactions 
-        WHERE project_id = %s 
-        ORDER BY created_at ASC 
-        LIMIT %s OFFSET %s
-    """, (selected_project_id, page_size, offset))
-    transactions = cursor.fetchall()
+    for entry in entries:
+        if entry["type"] == "transaction":
+            header = f"Paid by: {entry['paid_by']} | ₹{entry['amount']} | {entry['created_at'][:10]}"
+        else:
+            header = f"{entry['payer_name']} paid {entry['payee_name']} ₹{entry['amount']} on {entry['settled_at'][:10]}"
 
-    st.subheader("Transactions")
-    for txn in transactions:
-        with st.expander(f"Paid by: {txn['paid_by']} | Amount: ₹{txn['amount']} | Date: {txn['created_at'].strftime('%d-%m-%Y')}"):
-            updated_paid_by = st.text_input("Paid By", txn["paid_by"], key=f"paid_by_{txn['transaction_id']}")
-            updated_amount = st.number_input("Amount", value=float(txn["amount"]), key=f"amount_{txn['transaction_id']}")
-            updated_mode = st.selectbox("Mode", ["cash", "online"], index=["cash", "online"].index(txn["mode"]), key=f"mode_{txn['transaction_id']}")
-            updated_purpose = st.text_area("Purpose", txn["purpose"], key=f"purpose_{txn['transaction_id']}")
-            updated_split_type = st.selectbox("Split Type", ["auto", "custom"], index=["auto", "custom"].index(txn["split_type"]), key=f"split_{txn['transaction_id']}")
-            updated_date = st.date_input("Transaction Date", txn["created_at"].date(), key=f"date_{txn['transaction_id']}")
-
-            if st.button("Update", key=f"update_{txn['transaction_id']}"):
-                cursor.execute("""
-                    UPDATE transactions SET paid_by = %s, amount = %s, mode = %s,
-                    purpose = %s, split_type = %s, created_at = %s
-                    WHERE transaction_id = %s
-                """, (
-                    updated_paid_by, updated_amount, updated_mode,
-                    updated_purpose, updated_split_type, updated_date,
-                    txn["transaction_id"]
-                ))
-                conn.commit()
-                st.success("Transaction updated successfully.")
-                st.rerun()
-
-    # --- Settlements Section ---
-    st.subheader("Settlements")
-    cursor.execute("""
-        SELECT * FROM settlements
-        WHERE project_id = %s
-        ORDER BY settled_at ASC
-        LIMIT %s OFFSET %s
-    """, (selected_project_id, page_size, offset))
-    settlements = cursor.fetchall()
-
-    for s in settlements:
-        with st.expander(f"{s['payer_name']} paid {s['payee_name']} ₹{s['amount']} on {s['settled_at'].strftime('%d-%m-%Y')}"):
-            updated_paid_by = st.text_input("Paid By", s["payer_name"], key=f"settle_paid_by_{s['settlement_id']}")
-            updated_paid_to = st.text_input("Paid To", s["payee_name"], key=f"settle_paid_to_{s['settlement_id']}")
-            updated_amount = st.number_input("Amount", value=float(s["amount"]), key=f"settle_amt_{s['settlement_id']}")
-            updated_date = st.date_input("Settlement Date", s["settled_at"], key=f"settle_date_{s['settlement_id']}")
-
-            if st.button("Update", key=f"settle_update_{s['settlement_id']}"):
-                cursor.execute("""
-                    UPDATE settlements
-                    SET payer_name = %s, payee_name = %s, amount = %s, settled_at = %s
-                    WHERE settlement_id = %s
-                """, (
-                    updated_paid_by, updated_paid_to, updated_amount, updated_date,
-                    s["settlement_id"]
-                ))
-                conn.commit()
-                st.success("Settlement updated successfully.")
-                st.rerun()
-
-    cursor.close()
-    conn.close()
-
+        with st.expander(header):
+            if entry["type"] == "transaction":
+                # Editable fields
+                upd = {
+                    "paid_by": st.text_input("Paid By", entry["paid_by"], key=f"paid_by_t{entry['transaction_id']}"),
+                    "amount": st.number_input("Amount", float(entry["amount"]), key=f"amt_t{entry['transaction_id']}"),
+                    "mode": st.selectbox("Mode", ["cash", "online"], index=["cash", "online"].index(entry["mode"]), key=f"mode_t{entry['transaction_id']}"),
+                    "purpose": st.text_area("Purpose", entry["purpose"], key=f"purp_t{entry['transaction_id']}"),
+                    "split_type": st.selectbox("Split Type", ["auto", "custom"], index=["auto","custom"].index(entry["split_type"]), key=f"split_t{entry['transaction_id']}"),
+                    "created_at": st.date_input("Date", datetime.fromisoformat(entry["created_at"]).date(), key=f"date_t{entry['transaction_id']}").isoformat()
+                }
+                if st.button("Update", key=f"btn_t{entry['transaction_id']}"):
+                    if update_record("transactions", "transaction_id", entry["transaction_id"], upd):
+                        st.success("✅ Updated successfully")
+                        st.experimental_rerun()
+                    else:
+                        st.error("❌ Update failed")
+            else:
+                upd = {
+                    "payer_name": st.text_input("Payer", entry["payer_name"], key=f"payr_s{entry['settlement_id']}"),
+                    "payee_name": st.text_input("Payee", entry["payee_name"], key=f"pyee_s{entry['settlement_id']}"),
+                    "amount": st.number_input("Amount", float(entry["amount"]), key=f"amt_s{entry['settlement_id']}"),
+                    "settled_at": st.date_input("Date", datetime.fromisoformat(entry["settled_at"]).date(), key=f"date_s{entry['settlement_id']}").isoformat()
+                }
+                if st.button("Update", key=f"btn_s{entry['settlement_id']}"):
+                    if update_record("settlements", "settlement_id", entry["settlement_id"], upd):
+                        st.success("✅ Updated successfully")
+                        st.experimental_rerun()
+                    else:
+                        st.error("❌ Update failed")
 
 if __name__ == "__main__":
     main()

@@ -1,27 +1,21 @@
 import streamlit as st
-import psycopg2
+from supabase import create_client, Client
 
 # ---------- DB Connection ----------
+st.set_page_config(page_title="⚠️ Clear All Data")
 
-def get_db_connection():
-    conn = psycopg2.connect(
-        host=st.secrets["postgres"]["host"],
-        database=st.secrets["postgres"]["database"],
-        user=st.secrets["postgres"]["user"],
-        password=st.secrets["postgres"]["password"],
-        port=st.secrets["postgres"]["port"]
-    )
-    return conn
+@st.cache_resource
+def get_supabase_client() -> Client:
+    url = "https://ogecahtzmpsznesragam.supabase.co"
+    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nZWNhaHR6bXBzem5lc3JhZ2FtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk5MzE0NDEsImV4cCI6MjA2NTUwNzQ0MX0.SVPUtm2-bhTRjc0XZnUII8pHt2Jc435Mr_fsEkmKpvs"
+    return create_client(url, key)
+
+supabase = get_supabase_client()
 
 # ---------- Clear All Tables ----------
 
 def clear_all_tables():
-    conn = get_db_connection()
-    cursor = conn.cursor()
     try:
-        # PostgreSQL: disable constraint checks temporarily
-        cursor.execute("SET session_replication_role = 'replica';")
-
         tables = [
             "transaction_splits",
             "transactions",
@@ -33,24 +27,23 @@ def clear_all_tables():
         ]
 
         for table in tables:
-            cursor.execute(f"TRUNCATE TABLE {table} RESTART IDENTITY CASCADE;")
+            if table == "transaction_splits":
 
-        cursor.execute("SET session_replication_role = 'origin';")
-        conn.commit()
+                response = supabase.table(table).delete().neq(table[12:-1] + "_id", -1).execute()
+            else:
+                response = supabase.table(table).delete().neq(table[:-1] + "_id", -1).execute()
+
+            if response.data is None:
+                raise Exception(f"Failed to clear table '{table}': {response}")
+
         return True
 
     except Exception as e:
         st.error(f"❌ Error clearing data: {e}")
         return False
 
-    finally:
-        cursor.close()
-        conn.close()
-
-# ---------- Streamlit UI ----------
-
 def main():
-    st.set_page_config(page_title="⚠️ Clear All Data")
+    
     st.title("⚠️ Danger Zone: Clear All Project Data")
 
     st.warning("This will permanently delete all projects, partners, transactions, and documents.")
