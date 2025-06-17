@@ -58,56 +58,55 @@ def main():
     projects = proj_res.data or []
     project_map = {p["project_name"]: p["project_id"] for p in projects}
 
+    if len(project_map) == 0:
+        st.warning("Create a project first.")
+    else: 
 
-    st.write(project_map)
-    if len(list(project_map.keys())) == 0:
-    	st.write("No projects created yet")
-    
-    else:
-		selected = st.selectbox("Select Project", list(project_map.keys()))
-	    project_id = project_map[selected]
-	    page_size = 10
-	    page_no = st.number_input("Page Number", min_value=1, value=1)
-	    offset = (page_no - 1) * page_size
+        selected = st.selectbox("Select Project", list(project_map.keys()))
+        project_id = project_map[selected]
 
-	    entries = fetch_combined_entries(project_id, page_size, offset)
+        page_size = 10
+        page_no = st.number_input("Page Number", min_value=1, value=1)
+        offset = (page_no - 1) * page_size
 
-	    for entry in entries:
-			if entry["type"] == "transaction":
-			    header = f"Paid by: {entry['paid_by']} | ₹{entry['amount']} | {entry['created_at'][:10]}"
-			else:
-			    header = f"{entry['paid_by']} paid {entry['paid_to']} ₹{entry['amount']} on {entry['created_at'][:10]}"
+        entries = fetch_combined_entries(project_id, page_size, offset)
 
-		with st.expander(header):
-		    if entry["type"] == "transaction":
-		        # Editable fields
-		        upd = {
-		            "paid_by": st.text_input("Paid By", entry["paid_by"], key=f"paid_by_t{entry['transaction_id']}"),
-		            "amount": st.number_input(label = "Amount", value = float(entry["amount"]), min_value = 0.0, key=f"amt_t{entry['transaction_id']}"),
-		            "mode": st.selectbox("Mode", ["cash", "online"], index=["cash", "online"].index(entry["mode"]), key=f"mode_t{entry['transaction_id']}"),
-		            "purpose": st.text_area("Purpose", entry["purpose"], key=f"purp_t{entry['transaction_id']}"),
-		            "split_type": st.selectbox("Split Type", ["auto", "custom"], index=["auto","custom"].index(entry["split_type"]), key=f"split_t{entry['transaction_id']}"),
-		            "created_at": st.date_input("Date", datetime.fromisoformat(entry["created_at"]).date(), key=f"date_t{entry['transaction_id']}").isoformat()
-		        }
-		        if st.button("Update", key=f"btn_t{entry['transaction_id']}"):
-		            if update_record("transactions", "transaction_id", entry["transaction_id"], upd):
-		                st.success("✅ Updated successfully")
-		                st.rerun()
-		            else:
-		                st.error("❌ Update failed")
-		    else:
-		        upd = {
-		            "paid_by": st.text_input("Payer", entry["paid_by"], key=f"payr_s{entry['settlement_id']}"),
-		            "paid_to": st.text_input("Payee", entry["paid_to"], key=f"pyee_s{entry['settlement_id']}"),
-		            "amount": st.number_input(label = "Amount", value = float(entry["amount"]),  min_value = 0.0, key=f"amt_s{entry['settlement_id']}"),
-		            "created_at": st.date_input("Date", datetime.fromisoformat(entry["created_at"]).date(), key=f"date_s{entry['settlement_id']}").isoformat()
-		        }
-		        if st.button("Update", key=f"btn_s{entry['settlement_id']}"):
-		            if update_record("settlements", "settlement_id", entry["settlement_id"], upd):
-		                st.success("✅ Updated successfully")
-		                st.rerun()
-		            else:
-		                st.error("❌ Update failed")
+        for entry in entries:
+            if entry["type"] == "transaction":
+                header = f"Paid by: {entry['paid_by']} | ₹{entry['amount']} | {entry['created_at'][:10]}"
+            else:
+                header = f"{entry['paid_by']} paid {entry['paid_to']} ₹{entry['amount']} on {entry['created_at'][:10]}"
+
+            with st.expander(header):
+                if entry["type"] == "transaction":
+                    # Editable fields
+                    upd = {
+                        "paid_by": st.text_input("Paid By", entry["paid_by"], key=f"paid_by_t{entry['transaction_id']}"),
+                        "amount": st.number_input(label = "Amount", value = float(entry["amount"]), min_value = 0.0, key=f"amt_t{entry['transaction_id']}"),
+                        "mode": st.selectbox("Mode", ["cash", "online"], index=["cash", "online"].index(entry["mode"]), key=f"mode_t{entry['transaction_id']}"),
+                        "purpose": st.text_area("Purpose", entry["purpose"], key=f"purp_t{entry['transaction_id']}"),
+                        "split_type": st.selectbox("Split Type", ["auto", "custom"], index=["auto","custom"].index(entry["split_type"]), key=f"split_t{entry['transaction_id']}"),
+                        "created_at": st.date_input("Date", datetime.fromisoformat(entry["created_at"]).date(), key=f"date_t{entry['transaction_id']}").isoformat()
+                    }
+                    if st.button("Update", key=f"btn_t{entry['transaction_id']}"):
+                        if update_record("transactions", "transaction_id", entry["transaction_id"], upd):
+                            st.success("✅ Updated successfully")
+                            st.rerun()
+                        else:
+                            st.error("❌ Update failed")
+                else:
+                    upd = {
+                        "paid_by": st.text_input("Payer", entry["paid_by"], key=f"payr_s{entry['settlement_id']}"),
+                        "paid_to": st.text_input("Payee", entry["paid_to"], key=f"pyee_s{entry['settlement_id']}"),
+                        "amount": st.number_input(label = "Amount", value = float(entry["amount"]),  min_value = 0.0, key=f"amt_s{entry['settlement_id']}"),
+                        "created_at": st.date_input("Date", datetime.fromisoformat(entry["created_at"]).date(), key=f"date_s{entry['settlement_id']}").isoformat()
+                    }
+                    if st.button("Update", key=f"btn_s{entry['settlement_id']}"):
+                        if update_record("settlements", "settlement_id", entry["settlement_id"], upd):
+                            st.success("✅ Updated successfully")
+                            st.rerun()
+                        else:
+                            st.error("❌ Update failed")
 
 if __name__ == "__main__":
     main()
