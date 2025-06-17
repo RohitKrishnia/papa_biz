@@ -57,19 +57,12 @@ def main():
     proj_res = supabase.table("projects").select("project_id,project_name").execute()
     projects = proj_res.data or []
     project_map = {p["project_name"]: p["project_id"] for p in projects}
-    if len(project_map) == 0:
+    if len(list(project_map.keys())) == 0:
     	st.write("No projects created yet")
     
     else:
-
-	
-	    selected = st.selectbox("Select Project", list(project_map.keys()))
-	    
-	    
+		selected = st.selectbox("Select Project", list(project_map.keys()))
 	    project_id = project_map[selected]
-	    
-	    
-
 	    page_size = 10
 	    page_no = st.number_input("Page Number", min_value=1, value=1)
 	    offset = (page_no - 1) * page_size
