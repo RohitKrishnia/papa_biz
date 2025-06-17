@@ -6,8 +6,8 @@ st.set_page_config(page_title="⚠️ Clear All Data")
 
 @st.cache_resource
 def get_supabase_client() -> Client:
-    url = "https://ogecahtzmpsznesragam.supabase.co"
-    key = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im9nZWNhaHR6bXBzem5lc3JhZ2FtIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NDk5MzE0NDEsImV4cCI6MjA2NTUwNzQ0MX0.SVPUtm2-bhTRjc0XZnUII8pHt2Jc435Mr_fsEkmKpvs"
+    url = st.secrets["supabase"]["url"]
+    key = st.secrets["supabase"]["anon_key"]
     return create_client(url, key)
 
 supabase = get_supabase_client()
