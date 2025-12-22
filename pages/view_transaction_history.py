@@ -68,6 +68,8 @@ def main():
         if transactions:
             df_trans = pd.DataFrame(transactions)
             df_trans.columns = [col.replace("_", " ").title() for col in df_trans.columns]
+            # df_trans["Amount"] = round(df_trans["Amount"]/1e5,2)
+            # df_trans = df_trans.rename(columns={"Amount": "Amount (Lakhs)"})
             st.dataframe(df_trans)
         else:
             st.info("No transactions found for this project.")
@@ -78,9 +80,14 @@ def main():
             if settlements:
                 df_settle = pd.DataFrame(settlements)
                 df_settle.columns = [col.replace("_", " ").title() for col in df_settle.columns]
+                # df_settle["Amount"] = round(df["Amount"]/1e5,2)
+                # df_settle = df_settle.rename(columns={"Amount": "Amount (Lakhs)"})
+
                 st.dataframe(df_settle)
             else:
                 st.info("No settlements recorded for this project.")
+
+
 
 if __name__ == "__main__":
     main()

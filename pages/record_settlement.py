@@ -129,6 +129,7 @@ paid_to_id = name_to_id[paid_to_name]
 c3, c4 = st.columns(2)
 with c3:
     amount = st.number_input("Amount (₹)", min_value=0.0, step=0.01, format="%.2f")
+    st.markdown(f"💰 Entered Amount: **₹{amount / 1_00_000:.2f} Lakhs**")
 with c4:
     settle_date = st.date_input("Settlement Date", value=date.today())
 

@@ -217,6 +217,7 @@ st.subheader("Edit Payout")
 c1, c2 = st.columns(2)
 with c1:
     es["amount_received"] = st.number_input("Total Amount Received (₹)", min_value=0.0, format="%.2f", value=float(es["amount_received"]), key="edit_amount")
+    st.markdown(f"💰 Entered Investment: **₹{es["amount_received"] / 1_00_000:.2f} Lakhs**")
 with c2:
     # if payout_date stored as string, convert to date object for date_input
     try:

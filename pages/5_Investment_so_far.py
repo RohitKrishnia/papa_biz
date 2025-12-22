@@ -214,9 +214,13 @@ def main():
     df = pd.DataFrame(rows)
     # Metrics
     c1, c2, c3 = st.columns(3)
-    c1.metric("Project Expected Cost", fmt_currency(expected_cost))
-    c2.metric("Total Expected (sum of stakeholders)", fmt_currency(total_expected))
-    c3.metric("Total Contributed (attributed from txns)", fmt_currency(total_contributed))
+    expected_cost_lakhs = round(expected_cost / 1_00_000, 2)
+    total_contributed_lakhs = round(total_contributed / 1_00_000, 2)
+
+
+    c1.metric("Project Expected Cost (Lakhs)", fmt_currency(expected_cost_lakhs))
+    # c2.metric("Total Expected (sum of stakeholders)", fmt_currency(total_expected))
+    c2.metric("Total Contributed (attributed from txns)", fmt_currency(total_contributed_lakhs))
 
     if external_unattributed > 0:
         st.caption(f"Note: {fmt_currency(external_unattributed)} could not be attributed to any stakeholder (paid_by and sources were external).")
@@ -227,17 +231,21 @@ def main():
     # Bar chart: contributed vs expected
     st.subheader("Contributed vs Expected (bar chart)")
     names = df["Stakeholder"].tolist()
+
     contributed_vals = df["Contributed (from sources + leftover) (₹)"].tolist()
     expected_vals = df["Expected Investment (₹)"].tolist()
+
+    contributed_vals_lakhs = [x / 1e5 for x in contributed_vals]
+    expected_vals_lakhs = [x / 1e5 for x in expected_vals]
 
     fig, ax = plt.subplots(figsize=(max(6, len(names)*0.6), 4))
     x = range(len(names))
     width = 0.4
-    ax.bar([i - width/2 for i in x], contributed_vals, width, label="Contributed")
-    ax.bar([i + width/2 for i in x], expected_vals, width, label="Expected")
+    ax.bar([i - width/2 for i in x], contributed_vals_lakhs, width, label="Contributed")
+    ax.bar([i + width/2 for i in x], expected_vals_lakhs, width, label="Expected")
     ax.set_xticks(list(x))
     ax.set_xticklabels(names, rotation=30, ha="right")
-    ax.set_ylabel("Amount (INR)")
+    ax.set_ylabel("Amount (INR) Lakhs")
     ax.set_title("Contributed vs Expected by Stakeholder")
     ax.legend()
     st.pyplot(fig)

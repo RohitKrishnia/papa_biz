@@ -163,6 +163,8 @@ all_user_id_map = {u["name"]: u["id"] for u in all_users}
 col1, col2 = st.columns(2)
 with col1:
     amount_received = st.number_input("Total Amount Received (₹)", min_value=0.0, format="%.2f", step=0.01)
+    if amount_received:
+        st.markdown(f"💰 Entered Investment: **₹{amount_received / 1_00_000:.2f} Lakhs**")
 with col2:
     payout_date = st.date_input("Payout Date", value=date.today())
 
@@ -280,6 +282,7 @@ for i, row in enumerate(st.session_state.payout_distributions):
             row["user_id"] = stakeholders[names.index(name_choice)]["id"]
         with c2:
             row["amount"] = st.number_input("Amount (₹)", min_value=0.0, step=0.01, format="%.2f", value=float(row.get("amount", 0.0)), key=f"dist_amt_{i}")
+            st.markdown(f"💰 Entered Amount: **₹{row["amount"] / 1_00_000:.2f} Lakhs**")
         with c3:
             if st.button("Remove", key=f"rm_dist_{i}"):
                 remove_idxs.append(i)

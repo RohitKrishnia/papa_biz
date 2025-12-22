@@ -162,7 +162,9 @@ for uid in sorted(list(stakeholder_ids), key=lambda x: user_names.get(x, "")):
 df = pd.DataFrame(rows)
 
 # 6) render
-st.metric("Total Payouts (sum of distributions)", f"₹{total_payouts:,.2f}")
+total_payouts_lakhs = round(total_payouts/1e5,2)
+st.metric("Total Payouts (Lakhs)", f"₹{total_payouts_lakhs:,.2f}")
+
 
 st.subheader("Per-stakeholder summary")
 st.dataframe(df.sort_values("Stakeholder").reset_index(drop=True), use_container_width=True)
