@@ -221,7 +221,7 @@ for sid in stakeholders:
     balances_before[sid] = bal
     before_rows.append({
         "Stakeholder": uid_map.get(sid, {}).get("name", f"User {sid}"),
-        "Ownership %": round(own, 4),
+        # "Ownership %": round(own, 4),
         "Contributed": round(paid, 2),
         "Should Have Paid": round(should, 2),
         "Net Balance (Paid - Should)": round(bal, 2),
@@ -302,8 +302,4 @@ sum_neg = -sum(v for v in balances_after.values() if v < 0)
 if abs(sum_pos - sum_neg) > 0.01:
     st.warning(f"Balances don’t net to zero (pos={sum_pos:.2f}, neg={sum_neg:.2f}). Check ownership data and rounding.")
 
-st.caption(
-    "Notes: (1) Pre-settlement plan uses contributions vs pro-rata shares. "
-    "(2) Each settlement reduces debtor’s deficit and creditor’s surplus. "
-    "(3) The final table shows what is still owed after applying all recorded settlements."
-)
+

@@ -104,7 +104,7 @@ def get_proof_file_data(proof_id: int):
     """Fetch and decode payment proof file data."""
     r = supabase.table("payment_proofs").select("file_data, file_name").eq("proof_id", proof_id).single().execute()
     if r.data and r.data.get("file_data"):
-        return base64.b64decode(r.data["file_data"]), r.data["file_name"]
+        return r.data["file_data"], r.data["file_name"]
     return None, None
 
 def replace_sources(transaction_id: int, rows: list[dict]):

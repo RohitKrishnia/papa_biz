@@ -366,7 +366,7 @@ if existing_attachments:
             try:
                 att_full = supabase.table("attachments").select("file_data, file_name").eq("attachment_id", att["attachment_id"]).single().execute().data
                 if att_full.get("file_data"):
-                    doc_data = base64.b64decode(att_full["file_data"])
+                    doc_data = att_full["file_data"]
                     # Determine MIME type from file extension
                     file_name = att_full["file_name"]
                     if file_name.lower().endswith('.pdf'):

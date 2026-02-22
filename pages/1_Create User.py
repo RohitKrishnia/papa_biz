@@ -145,7 +145,7 @@ bank_name_options = [
     "State Bank of India (SBI)", "Punjab National Bank (PNB)", "HDFC Bank", "ICICI Bank",
     "Axis Bank", "Kotak Mahindra Bank", "Bank of Baroda", "Union Bank of India",
     "Canara Bank", "IndusInd Bank", "Yes Bank", "IDFC FIRST Bank",
-    "Central Bank of India", "Indian Bank", "Bank of India",
+    "Central Bank of India", "Indian Bank", "Bank of India", "AU Bank"
 ]
 
 bank_accounts = []

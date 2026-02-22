@@ -116,6 +116,7 @@ def main():
 
             # Insert attachments
             for fname, (file, desc) in file_descriptions.items():
+                file.seek(0)
                 encoded_data = base64.b64encode(file.read()).decode("utf-8")
                 supabase.table("attachments").insert({
                     "project_id": project_id,
