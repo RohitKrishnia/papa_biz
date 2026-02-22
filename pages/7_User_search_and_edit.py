@@ -163,8 +163,7 @@ BANK_OPTIONS = [
     "Union Bank of India",
     "Bank of Baroda",
     "Canara Bank",
-    "Yes Bank",
-       "IDFC FIRST Bank"
+    "Yes Bank"
 ]
 
 # --- Search User ---
