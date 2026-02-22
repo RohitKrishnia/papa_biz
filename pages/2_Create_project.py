@@ -51,7 +51,9 @@ def main():
         )
         used_ids.add(partner_selection["id"])
 
-        partner_share = st.number_input(f"Partner {i+1} Share (%)", key=f"partner_share_{i}", min_value=0.0)
+        partner_share = st.number_input(f"Partner {i+1} Absolute Contribution (₹)", key=f"partner_share_{i}", min_value=0.0, step=1000.0)
+        if partner_share:
+            st.caption(f"= **₹{partner_share / 1_00_000:.2f} Lakhs**")
         num_sub_partners = st.number_input(f"Number of Sub-partners for Partner {i+1}", min_value=0, step=1, key=f"num_sub_{i}")
 
         sub_partners = []
@@ -64,7 +66,9 @@ def main():
                 key=f"sub_name_{i}_{j}"
             )
             used_ids.add(sub_selection["id"])
-            sub_share = st.number_input(f"Sub-Partner {j+1} Share (%)", key=f"sub_share_{i}_{j}", min_value=0.0)
+            sub_share = st.number_input(f"Sub-Partner {j+1} Absolute Contribution (₹)", key=f"sub_share_{i}_{j}", min_value=0.0, step=1000.0)
+            if sub_share:
+                st.caption(f"= **₹{sub_share / 1_00_000:.2f} Lakhs**")
             sub_partners.append((sub_selection["id"], sub_share))
 
         partners_data.append((partner_selection["id"], partner_share, sub_partners))
@@ -95,7 +99,7 @@ def main():
                 partner_res = supabase.table("partners").insert({
                     "project_id": project_id,
                     "partner_user_id": partner_id,  # store the user ID now
-                    "share_percentage": share
+                    "share_absolute": share
                 }).execute()
 
                 if not partner_res.data:
@@ -107,7 +111,7 @@ def main():
                     supabase.table("sub_partners").insert({
                         "partner_id": partner_db_id,
                         "sub_partner_user_id": sub_user_id,  # store the sub-partner's user ID
-                        "share_percentage": sub_share
+                        "share_absolute": sub_share
                     }).execute()
 
             # Insert attachments

@@ -107,6 +107,7 @@
 
 import streamlit as st
 from supabase import create_client, Client
+import base64
 
 st.set_page_config(page_title="Add Users")
 
@@ -158,9 +159,14 @@ for i in range(num_accounts):
         key=f"bank_name_{i}"
     )
     account_number = st.text_input(f"Account Number {i+1}", key=f"account_number_{i}")
+    ifsc_code = st.text_input(f"IFSC Code {i+1} (optional)", key=f"ifsc_code_{i}")
+    document_file = st.file_uploader(f"Upload Document {i+1} (PDF/JPEG) - optional", type=["pdf", "jpg", "jpeg"], key=f"doc_{i}")
+    
     bank_accounts.append({
         "bank_name": to_null(bank_name),
         "account_number": to_null(account_number),
+        "ifsc_code": to_null(ifsc_code),
+        "document_file": document_file,
     })
 
 
@@ -210,11 +216,24 @@ if st.button("Add User"):
 
             # Insert valid bank accounts
             for account in valid_accounts:
-                supabase.table("bank_accounts").insert({
+                account_data = {
                     "user_id": user_id,
                     "bank_name": account["bank_name"],
-                    "account_number": account["account_number"]
-                }).execute()
+                    "account_number": account["account_number"],
+                    "ifsc_code": account.get("ifsc_code"),
+                }
+                
+                # Handle document upload if provided
+                if account.get("document_file"):
+                    account_data["document_file_data"] = base64.b64encode(account["document_file"].read()).decode("utf-8")
+                    account_data["document_file_name"] = account["document_file"].name
+                    # Determine MIME type
+                    if account["document_file"].name.lower().endswith('.pdf'):
+                        account_data["document_mime_type"] = "application/pdf"
+                    elif account["document_file"].name.lower().endswith(('.jpg', '.jpeg')):
+                        account_data["document_mime_type"] = "image/jpeg"
+                
+                supabase.table("bank_accounts").insert(account_data).execute()
 
             st.success("✅ User and bank accounts added successfully!")
         else:

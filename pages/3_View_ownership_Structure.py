@@ -39,7 +39,7 @@ def get_user_name_by_id(user_id, supabase):
 
 def display_ownership_tree(project_id):
     partners_resp = supabase.table("partners") \
-        .select("partner_id, partner_user_id, share_percentage") \
+        .select("partner_id, partner_user_id, share_absolute") \
         .eq("project_id", project_id) \
         .execute()
 
@@ -52,19 +52,18 @@ def display_ownership_tree(project_id):
     for partner in partners_resp.data:
         partner_id = partner["partner_id"]
         partner_name = get_user_name_by_id(partner["partner_user_id"],supabase)
-        partner_share = partner["share_percentage"]
-        st.markdown(f"🔵 **{partner_name}** - {partner_share}%")
+        partner_share_abs = float(partner.get("share_absolute") or 0.0)
+        st.markdown(f"🔵 **{partner_name}** - ₹{partner_share_abs:,.2f}")
 
         sub_resp = supabase.table("sub_partners") \
-            .select("sub_partner_user_id, share_percentage") \
+            .select("sub_partner_user_id, share_absolute") \
             .eq("partner_id", partner_id) \
             .execute()
 
         for sub in sub_resp.data or []:
-
-            effective_share = round(partner_share * sub["share_percentage"] / 100, 2)
+            sub_share_abs = float(sub.get("share_absolute") or 0.0)
             sub_partner_name = get_user_name_by_id(sub["sub_partner_user_id"], supabase)
-            st.markdown(f"&emsp;&emsp;🔹 **{sub_partner_name}** - {effective_share}% (of project)",unsafe_allow_html=True)
+            st.markdown(f"&emsp;&emsp;🔹 **{sub_partner_name}** - ₹{sub_share_abs:,.2f}",unsafe_allow_html=True)
 
 # ---------- Streamlit UI ----------
 

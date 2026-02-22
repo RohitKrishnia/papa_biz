@@ -28,13 +28,38 @@ def get_transactions(project_name):
 
     tx_res = (
         supabase.table("transactions")
-        .select("transaction_type, paid_by, amount, mode, purpose, split_type, created_at")
+        .select("transaction_type, paid_by, amount, mode, purpose, created_at")
         .eq("project_id", project_id)
         .order("created_at", desc=True)
         .execute()
     )
 
-    return tx_res.data or [], project_id
+    transactions = tx_res.data or []
+    
+    # Get all unique paid_by user IDs
+    paid_by_ids = [txn.get("paid_by") for txn in transactions if txn.get("paid_by") is not None]
+    unique_user_ids = list(set(paid_by_ids))
+    
+    # Batch fetch user names
+    user_name_map = {}
+    if unique_user_ids:
+        users_res = (
+            supabase.table("users")
+            .select("id, name")
+            .in_("id", unique_user_ids)
+            .execute()
+        )
+        user_name_map = {u["id"]: u["name"] for u in (users_res.data or [])}
+    
+    # Replace paid_by IDs with user names
+    for txn in transactions:
+        paid_by_id = txn.get("paid_by")
+        if paid_by_id is not None:
+            txn["paid_by"] = user_name_map.get(paid_by_id, f"User {paid_by_id}")
+        else:
+            txn["paid_by"] = "—"  # Display dash for None values
+
+    return transactions, project_id
 
 # ---------- Fetch Settlements ----------
 

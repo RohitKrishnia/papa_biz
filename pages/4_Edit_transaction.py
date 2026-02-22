@@ -95,6 +95,18 @@ def fetch_sources(transaction_id: int):
     r = supabase.table("transaction_sources").select("id, source_id, is_partner, amount").eq("transaction_id", transaction_id).execute()
     return r.data or []
 
+def fetch_payment_proofs(transaction_id: int):
+    """Fetch all payment proofs for a transaction."""
+    r = supabase.table("payment_proofs").select("proof_id, file_name, description").eq("transaction_id", transaction_id).execute()
+    return r.data or []
+
+def get_proof_file_data(proof_id: int):
+    """Fetch and decode payment proof file data."""
+    r = supabase.table("payment_proofs").select("file_data, file_name").eq("proof_id", proof_id).single().execute()
+    if r.data and r.data.get("file_data"):
+        return base64.b64decode(r.data["file_data"]), r.data["file_name"]
+    return None, None
+
 def replace_sources(transaction_id: int, rows: list[dict]):
     """Delete all existing sources for txn and insert fresh payload."""
     supabase.table("transaction_sources").delete().eq("transaction_id", transaction_id).execute()
@@ -120,6 +132,8 @@ def idx_for_user(users, user_id):
 # -------------------------------
 if "edit_sources" not in st.session_state:
     st.session_state.edit_sources = []  # [{source_id, amount, is_partner}]
+if "sources_to_remove" not in st.session_state:
+    st.session_state.sources_to_remove = []  # Indices of sources marked for removal
 
 # -------------------------------
 # UI: Project → Transaction selector
@@ -159,6 +173,7 @@ txn = txns[labels.index(selected_label)]
 transaction_id = txn["transaction_id"]
 
 # Load sources for this transaction into session state (only when txn changes)
+# Always fetch fresh from DB when transaction changes, ignoring any unsaved removals
 if st.session_state.get("loaded_txn_id") != transaction_id:
     existing_sources = fetch_sources(transaction_id)
     st.session_state.edit_sources = [
@@ -166,6 +181,7 @@ if st.session_state.get("loaded_txn_id") != transaction_id:
          "is_partner": bool(s.get("is_partner", False))}
         for s in existing_sources
     ]
+    st.session_state.sources_to_remove = []  # Reset removal list when loading new transaction
     st.session_state.loaded_txn_id = transaction_id
 
 # -------------------------------
@@ -234,9 +250,11 @@ st.subheader("Sources of Funds")
 if st.button("➕ Add Source"):
     st.session_state.edit_sources.append({"source_id": users[0]["id"] if users else None, "amount": 0.0, "is_partner": False})
 
-remove_src_idx = []
-for i, row in enumerate(st.session_state.edit_sources):
-    with st.expander(f"Source {i+1}", expanded=True):
+# Filter out sources marked for removal for display (they disappear from UI)
+active_sources_display = [(i, row) for i, row in enumerate(st.session_state.edit_sources) if i not in st.session_state.sources_to_remove]
+
+for display_idx, (i, row) in enumerate(active_sources_display, start=1):
+    with st.expander(f"Source {display_idx}", expanded=True):
         c1, c2, c3 = st.columns([1.2, 0.8, 0.6])
         with c1:
             names = [u["name"] for u in users]
@@ -251,12 +269,14 @@ for i, row in enumerate(st.session_state.edit_sources):
             row["is_partner"] = (row["source_id"] in stakeholder_or_children_ids)
             st.checkbox("Is Partner?", value=row["is_partner"], disabled=True, key=f"src_is_partner_{i}")
         if st.button("Remove", key=f"rm_src_{i}"):
-            remove_src_idx.append(i)
+            # Mark for removal - source disappears from UI immediately
+            if i not in st.session_state.sources_to_remove:
+                st.session_state.sources_to_remove.append(i)
+            st.rerun()
 
-for idx in reversed(remove_src_idx):
-    st.session_state.edit_sources.pop(idx)
-
-sources_total = sum(money(r.get("amount")) for r in st.session_state.edit_sources)
+# Calculate total excluding sources marked for removal
+active_sources_for_total = [r for i, r in enumerate(st.session_state.edit_sources) if i not in st.session_state.sources_to_remove]
+sources_total = sum(money(r.get("amount")) for r in active_sources_for_total)
 st.caption(f"Sources total: **₹{sources_total:,.2f}** / Transaction amount: **₹{amount:,.2f}**")
 
 gap = money(amount) - sources_total
@@ -268,6 +288,62 @@ if gap > 1e-6:
     )
 else:
     funding_note = st.text_area("Funding Note (optional)", value=funding_note_existing)
+
+# -------------------------------
+# Payment Proof Section
+# -------------------------------
+st.subheader("Proof of Payment")
+
+# Display existing proofs
+existing_proofs = fetch_payment_proofs(transaction_id)
+if existing_proofs:
+    st.markdown("**Existing Proofs:**")
+    proofs_to_delete = []
+    for proof in existing_proofs:
+        col1, col2, col3 = st.columns([2.5, 1, 1])
+        with col1:
+            desc = proof.get("description", "") or "No description"
+            st.markdown(f"📄 **{proof['file_name']}** - {desc}")
+        with col2:
+            # Download proof
+            try:
+                doc_data, file_name = get_proof_file_data(proof["proof_id"])
+                if doc_data and file_name:
+                    # Determine MIME type from file extension
+                    if file_name.lower().endswith('.pdf'):
+                        mime_type = "application/pdf"
+                    elif file_name.lower().endswith(('.jpg', '.jpeg')):
+                        mime_type = "image/jpeg"
+                    else:
+                        mime_type = "application/octet-stream"
+                    st.download_button(
+                        "📥 Download",
+                        data=doc_data,
+                        file_name=file_name,
+                        mime=mime_type,
+                        key=f"download_proof_{proof['proof_id']}"
+                    )
+            except Exception as e:
+                st.error(f"Could not load proof: {e}")
+        with col3:
+            if st.button("🗑️ Remove", key=f"del_proof_{proof['proof_id']}"):
+                proofs_to_delete.append(proof["proof_id"])
+    
+    # Delete selected proofs
+    if proofs_to_delete:
+        try:
+            for proof_id in proofs_to_delete:
+                supabase.table("payment_proofs").delete().eq("proof_id", proof_id).execute()
+            st.success(f"✅ Removed {len(proofs_to_delete)} proof(s)")
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Failed to remove proof: {e}")
+
+# Upload new proof
+st.markdown("**Upload New Proof:**")
+new_proof_file = st.file_uploader("Upload proof (PDF/JPEG)", type=["pdf", "jpg", "jpeg"], key="new_proof")
+new_proof_name = st.text_input("Proof File Name", key="new_proof_name")
+new_proof_desc = st.text_area("Proof Description", key="new_proof_desc")
 
 # -------------------------------
 # Save changes
@@ -315,14 +391,39 @@ if st.button("💾 Save Changes"):
         # 2) Mode detail → delete old & insert current
         upsert_mode_detail(transaction_id, mode, mode_data)
 
-        # 3) Sources → replace all rows for this transaction
+        # 3) Sources → replace all rows for this transaction (excluding those marked for removal)
+        # Filter out sources marked for removal
+        active_sources = [r for i, r in enumerate(st.session_state.edit_sources) if i not in st.session_state.sources_to_remove]
         payload = [{
             "transaction_id": transaction_id,
             "source_id": r["source_id"],
             "is_partner": bool(r["is_partner"]),
             "amount": money(r["amount"]),
-        } for r in st.session_state.edit_sources if r.get("source_id") is not None and money(r.get("amount")) > 0.0]
+        } for r in active_sources if r.get("source_id") is not None and money(r.get("amount")) > 0.0]
         replace_sources(transaction_id, payload)
+        
+        # Update session state to reflect what's actually in the database
+        # Remove sources that were marked for removal from the session state
+        st.session_state.edit_sources = [r for i, r in enumerate(st.session_state.edit_sources) if i not in st.session_state.sources_to_remove]
+        
+        # Clear the removal list after successful save
+        st.session_state.sources_to_remove = []
+        
+        # Force reload from database on next render by invalidating loaded_txn_id
+        # This ensures we always show what's actually in the database
+        if "loaded_txn_id" in st.session_state:
+            del st.session_state.loaded_txn_id
+
+        # 4) Insert new proof if uploaded
+        if new_proof_file:
+            new_proof_file.seek(0)  # Reset file pointer
+            encoded_data = base64.b64encode(new_proof_file.read()).decode("utf-8")
+            supabase.table("payment_proofs").insert({
+                "transaction_id": transaction_id,
+                "file_name": (new_proof_name or new_proof_file.name),
+                "file_data": encoded_data,
+                "description": (new_proof_desc or None)
+            }).execute()
 
         st.success("✅ Transaction updated successfully.")
         st.toast("Saved!", icon="✅")

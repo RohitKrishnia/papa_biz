@@ -5,6 +5,7 @@
 import streamlit as st
 from datetime import date, datetime
 from supabase import create_client, Client
+import base64
 
 # -------------------------
 # Page & Supabase Setup
@@ -66,6 +67,15 @@ def fetch_project_full(project_id: int):
 
     return proj, partners, subs_by_partner
 
+def fetch_attachments(project_id: int):
+    """Fetch all attachments for a project."""
+    r = (supabase.table("attachments")
+         .select("attachment_id, file_name, description")
+         .eq("project_id", project_id)
+         .order("attachment_id")
+         .execute())
+    return r.data or []
+
 def get_user_name(user_id: int, users_by_id: dict[int, str]) -> str:
     """Resolve user name locally (we already fetch all users)."""
     return users_by_id.get(user_id, f"User {user_id}")
@@ -89,6 +99,7 @@ if "edit_state" not in st.session_state:
     st.session_state.edit_state = {
         "project_id": None,   # currently selected project_id
         "partners": [],       # UI rows: [{partner_id, partner_user_id, share_percentage, subs:[{sub_partner_id, sub_partner_user_id, share_percentage}]}]
+        "attachments": [],    # List of existing attachments
     }
 if "project_form" not in st.session_state:
     st.session_state.project_form = {
@@ -133,12 +144,12 @@ if selected_project_id and st.session_state.edit_state["project_id"] != selected
         partner_rows.append({
             "partner_id": p["partner_id"],
             "partner_user_id": p["partner_user_id"],
-            "share_percentage": fnum(p["share_percentage"] or 0),
+            "share_absolute": fnum(p["share_absolute"] or 0),
             "subs": [
                 {
                     "sub_partner_id": sp["sub_partner_id"],
                     "sub_partner_user_id": sp["sub_partner_user_id"],
-                    "share_percentage": fnum(sp["share_percentage"] or 0),
+                    "share_absolute": fnum(sp["share_absolute"] or 0),
                 }
                 for sp in subs_by_partner.get(p["partner_id"], [])
             ],
@@ -152,6 +163,8 @@ if selected_project_id and st.session_state.edit_state["project_id"] != selected
         "start_date": date.fromisoformat(proj["start_date"]) if proj.get("start_date") else date.today(),
         "expected_cost": fnum(proj.get("expected_cost") or 0.0),
     }
+    # Load attachments into session state
+    st.session_state.edit_state["attachments"] = fetch_attachments(selected_project_id)
 
 # Stop if nothing selected yet
 if not st.session_state.edit_state["project_id"]:
@@ -239,14 +252,16 @@ for i, prow in enumerate(st.session_state.edit_state["partners"]):
             )
             prow["partner_user_id"] = chosen["id"]
 
-        # Partner share (% of project)
+        # Partner share (absolute contribution)
         with cc2:
-            prow["share_percentage"] = st.number_input(
-                "Share (%)",
-                min_value=0.0, step=0.1,
-                value=fnum(prow.get("share_percentage")),
+            prow["share_absolute"] = st.number_input(
+                "Absolute Contribution (₹)",
+                min_value=0.0, step=1000.0,
+                value=fnum(prow.get("share_absolute")),
                 key=f"partner_share_{i}"
             )
+            if prow.get("share_absolute"):
+                st.caption(f"= **₹{fnum(prow.get('share_absolute')) / 1_00_000:.2f} Lakhs**")
 
         # Delete partner
         with cc3:
@@ -254,8 +269,8 @@ for i, prow in enumerate(st.session_state.edit_state["partners"]):
             if st.button("🗑️ Delete Partner", key=f"del_partner_{i}"):
                 remove_partner_indices.append(i)
 
-        # ---- Sub-partners (relative to this partner) ----
-        st.markdown("**Sub-partners (relative % of this partner)**")
+        # ---- Sub-partners (absolute contribution) ----
+        st.markdown("**Sub-partners (absolute contribution)**")
         rm_sub_idx = []
         for j, sp in enumerate(prow.get("subs", [])):
             sc1, sc2, sc3 = st.columns([1.2, 0.8, 0.6])
@@ -282,15 +297,14 @@ for i, prow in enumerate(st.session_state.edit_state["partners"]):
                 sp["sub_partner_user_id"] = chosen_sub["id"]
 
             with sc2:
-                sp["share_percentage"] = st.number_input(
-                    "Relative Share (%)",
-                    min_value=0.0, step=0.1,
-                    value=fnum(sp.get("share_percentage")),
+                sp["share_absolute"] = st.number_input(
+                    "Absolute Contribution (₹)",
+                    min_value=0.0, step=1000.0,
+                    value=fnum(sp.get("share_absolute")),
                     key=f"sub_share_{i}_{j}"
                 )
-                # Show effective % of project
-                effective_abs = (fnum(sp["share_percentage"]) / 100.0) * fnum(prow.get("share_percentage"))
-                st.caption(f"Effective share = **{effective_abs:.2f}%** of project")
+                if sp.get("share_absolute"):
+                    st.caption(f"= **₹{fnum(sp.get('share_absolute')) / 1_00_000:.2f} Lakhs**")
 
             with sc3:
                 st.write("")
@@ -309,7 +323,7 @@ for i, prow in enumerate(st.session_state.edit_state["partners"]):
             prow.setdefault("subs", []).append({
                 "sub_partner_id": None,
                 "sub_partner_user_id": None,
-                "share_percentage": 0.0,
+                "share_absolute": 0.0,
             })
 
 # Apply partner deletions after loop
@@ -328,35 +342,95 @@ if st.button("➕ Add Partner"):
     st.session_state.edit_state["partners"].append({
         "partner_id": None,
         "partner_user_id": None,
-        "share_percentage": 0.0,
+        "share_absolute": 0.0,
         "subs": []
     })
 
 # -------------------------
+# Documents Section
+# -------------------------
+st.divider()
+st.subheader("Documents")
+
+# Display existing attachments
+existing_attachments = st.session_state.edit_state.get("attachments", [])
+if existing_attachments:
+    st.markdown("**Existing Documents:**")
+    for att in existing_attachments:
+        col1, col2, col3 = st.columns([2.5, 1, 1])
+        with col1:
+            desc = att.get("description", "") or "No description"
+            st.markdown(f"📄 **{att['file_name']}** - {desc}")
+        with col2:
+            # Fetch and decode document for download
+            try:
+                att_full = supabase.table("attachments").select("file_data, file_name").eq("attachment_id", att["attachment_id"]).single().execute().data
+                if att_full.get("file_data"):
+                    doc_data = base64.b64decode(att_full["file_data"])
+                    # Determine MIME type from file extension
+                    file_name = att_full["file_name"]
+                    if file_name.lower().endswith('.pdf'):
+                        mime_type = "application/pdf"
+                    elif file_name.lower().endswith(('.jpg', '.jpeg')):
+                        mime_type = "image/jpeg"
+                    else:
+                        mime_type = "application/octet-stream"
+                    st.download_button(
+                        "📥 Download",
+                        data=doc_data,
+                        file_name=file_name,
+                        mime=mime_type,
+                        key=f"download_att_{att['attachment_id']}"
+                    )
+            except Exception as e:
+                st.error(f"Could not load document: {e}")
+        with col3:
+            if st.button("🗑️ Remove", key=f"del_att_{att['attachment_id']}"):
+                try:
+                    supabase.table("attachments").delete().eq("attachment_id", att["attachment_id"]).execute()
+                    st.success(f"✅ Removed document: {att['file_name']}")
+                    st.session_state.edit_state["attachments"] = fetch_attachments(st.session_state.edit_state["project_id"])
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Failed to remove document: {e}")
+
+# Upload new attachments
+st.markdown("**Upload New Documents:**")
+uploaded_files = st.file_uploader("Attach Files (PDF/JPEG)", type=["pdf", "jpg", "jpeg"], accept_multiple_files=True, key="new_attachments")
+new_file_descriptions = {}
+if uploaded_files:
+    for uploaded_file in uploaded_files:
+        desc = st.text_input(f"Description for {uploaded_file.name}", key=f"new_desc_{uploaded_file.name}")
+        new_file_descriptions[uploaded_file.name] = (uploaded_file, desc)
+
+# -------------------------
 # Validations (pre-save)
 # -------------------------
-# 1) Partner totals must be exactly 100%
-total_partner_share = sum(fnum(p.get("share_percentage")) for p in st.session_state.edit_state["partners"])
+# 1) Partner totals must equal expected_cost
+expected_cost = fnum(st.session_state.project_form.get("expected_cost", 0.0))
+total_partner_absolute = sum(fnum(p.get("share_absolute")) for p in st.session_state.edit_state["partners"])
 EPS = 1e-6
-if total_partner_share < 100.0 - EPS:
-    st.warning(
-        f"⚠️ Total partner share is **{total_partner_share:.2f}%** (short by **{100.0 - total_partner_share:.2f}%**). "
-        "Ownership must sum to exactly 100%."
-    )
-elif total_partner_share > 100.0 + EPS:
-    st.error(
-        f"❌ Total partner share is **{total_partner_share:.2f}%** (exceeds by **{total_partner_share - 100.0:.2f}%**). "
-        "Reduce shares to make it exactly 100%."
-    )
+if expected_cost > 0:
+    if abs(total_partner_absolute - expected_cost) > EPS:
+        if total_partner_absolute < expected_cost:
+            st.warning(
+                f"⚠️ Total partner contributions is **₹{total_partner_absolute:,.2f}** (short by **₹{expected_cost - total_partner_absolute:,.2f}**). "
+                f"Should equal expected investment of **₹{expected_cost:,.2f}**."
+            )
+        else:
+            st.error(
+                f"❌ Total partner contributions is **₹{total_partner_absolute:,.2f}** (exceeds by **₹{total_partner_absolute - expected_cost:,.2f}**). "
+                f"Should equal expected investment of **₹{expected_cost:,.2f}**."
+            )
 
-# 2) Warn if any partner’s sub-partners (absolute) exceed the partner share
+# 2) Warn if any partner's sub-partners (absolute) exceed the partner share
 for i, p in enumerate(st.session_state.edit_state["partners"]):
-    partner_share = fnum(p.get("share_percentage"))
-    total_sub_abs = sum((fnum(sp.get("share_percentage")) / 100.0) * partner_share for sp in p.get("subs", []))
-    if total_sub_abs > partner_share + EPS:
+    partner_share_abs = fnum(p.get("share_absolute"))
+    total_sub_abs = sum(fnum(sp.get("share_absolute")) for sp in p.get("subs", []))
+    if total_sub_abs > partner_share_abs + EPS:
         st.warning(
-            f"⚠️ Partner {i+1}: sub-partners combined absolute share **{total_sub_abs:.2f}%** "
-            f"exceeds partner share **{partner_share:.2f}%**."
+            f"⚠️ Partner {i+1}: sub-partners combined contribution **₹{total_sub_abs:,.2f}** "
+            f"exceeds partner contribution **₹{partner_share_abs:,.2f}**."
         )
 
 # -------------------------
@@ -390,17 +464,21 @@ if st.button("💾 Save All Changes"):
             else:
                 seen.add(suid)
 
-    # Hard block: partner shares must equal 100
-    if abs(total_partner_share - 100.0) > EPS:
-        if total_partner_share < 100.0:
+    # Hard block: partner absolute contributions must equal expected_cost
+    expected_cost = fnum(st.session_state.project_form.get("expected_cost", 0.0))
+    total_partner_absolute = sum(fnum(p.get("share_absolute")) for p in st.session_state.edit_state["partners"])
+    if expected_cost > 0 and abs(total_partner_absolute - expected_cost) > EPS:
+        if total_partner_absolute < expected_cost:
             errors.append(
-                f"Total partner share is **{total_partner_share:.2f}%** "
-                f"(short by **{100.0 - total_partner_share:.2f}%**). Must be exactly 100%."
+                f"Total partner contributions is **₹{total_partner_absolute:,.2f}** "
+                f"(short by **₹{expected_cost - total_partner_absolute:,.2f}**). "
+                f"Must equal expected investment of **₹{expected_cost:,.2f}**."
             )
         else:
             errors.append(
-                f"Total partner share is **{total_partner_share:.2f}%** "
-                f"(exceeds by **{total_partner_share - 100.0:.2f}%**). Must be exactly 100%."
+                f"Total partner contributions is **₹{total_partner_absolute:,.2f}** "
+                f"(exceeds by **₹{total_partner_absolute - expected_cost:,.2f}**). "
+                f"Must equal expected investment of **₹{expected_cost:,.2f}**."
             )
 
     if errors:
@@ -442,14 +520,14 @@ if st.button("💾 Save All Changes"):
             if p.get("partner_id"):  # update
                 supabase.table("partners").update({
                     "partner_user_id": p["partner_user_id"],
-                    "share_percentage": fnum(p["share_percentage"]),
+                    "share_absolute": fnum(p["share_absolute"]),
                 }).eq("partner_id", p["partner_id"]).execute()
                 summary["partners_updated"] += 1
             else:                     # insert
                 ins = supabase.table("partners").insert({
                     "project_id": pid,
                     "partner_user_id": p["partner_user_id"],
-                    "share_percentage": fnum(p["share_percentage"]),
+                    "share_absolute": fnum(p["share_absolute"]),
                 }).execute()
                 p["partner_id"] = ins.data[0]["partner_id"]
                 summary["partners_inserted"] += 1
@@ -478,25 +556,42 @@ if st.button("💾 Save All Changes"):
                 if sp.get("sub_partner_id"):  # update
                     supabase.table("sub_partners").update({
                         "sub_partner_user_id": sp["sub_partner_user_id"],
-                        "share_percentage": fnum(sp["share_percentage"]),
+                        "share_absolute": fnum(sp["share_absolute"]),
                     }).eq("sub_partner_id", sp["sub_partner_id"]).execute()
                     summary["subs_updated"] += 1
                 else:                          # insert
                     ins = supabase.table("sub_partners").insert({
                         "partner_id": partner_id_actual,
                         "sub_partner_user_id": sp["sub_partner_user_id"],
-                        "share_percentage": fnum(sp["share_percentage"]),
+                        "share_absolute": fnum(sp["share_absolute"]),
                     }).execute()
                     sp["sub_partner_id"] = ins.data[0]["sub_partner_id"]
                     summary["subs_inserted"] += 1
 
-        # 4) Success UI
-        st.success(
+        # 4) Insert new attachments
+        attachments_inserted = 0
+        if new_file_descriptions:
+            for fname, (file, desc) in new_file_descriptions.items():
+                file.seek(0)  # Reset file pointer
+                encoded_data = base64.b64encode(file.read()).decode("utf-8")
+                supabase.table("attachments").insert({
+                    "project_id": pid,
+                    "file_name": fname,
+                    "file_data": encoded_data,
+                    "description": desc or ""
+                }).execute()
+                attachments_inserted += 1
+
+        # 5) Success UI
+        success_msg = (
             "✅ Changes saved to database.\n\n"
             f"- Project updated\n"
             f"- Partners: +{summary['partners_inserted']} / ✎{summary['partners_updated']} / −{summary['partners_deleted']}\n"
             f"- Sub-partners: +{summary['subs_inserted']} / ✎{summary['subs_updated']} / −{summary['subs_deleted']}"
         )
+        if attachments_inserted > 0:
+            success_msg += f"\n- Documents: +{attachments_inserted} new attachment(s)"
+        st.success(success_msg)
         st.toast("Project, partners, and sub-partners updated.", icon="✅")
         st.rerun()
 
@@ -506,3 +601,105 @@ if st.button("💾 Save All Changes"):
             f"**Reason:** {e}\n\n"
             "Tips: verify RLS policies allow INSERT/UPDATE/DELETE for this role and that FK IDs exist."
         )
+
+# -------------------------
+# Delete Project Section
+# -------------------------
+st.divider()
+st.subheader("⚠️ Danger Zone")
+
+with st.expander("🗑️ Delete Project", expanded=False):
+    st.warning("**WARNING:** This will permanently delete the project and ALL associated data including:")
+    st.markdown("""
+    - All partners and sub-partners
+    - All documents/attachments
+    - All transactions and their details
+    - All settlements and their details
+    - All related records
+    
+    **This action cannot be undone!**
+    """)
+    
+    confirm_text = st.text_input(
+        f"Type the project name '{st.session_state.project_form['project_name']}' to confirm deletion:",
+        key="delete_confirm"
+    )
+    
+    if st.button("🗑️ Delete Project Permanently", type="primary", use_container_width=True):
+        if confirm_text != st.session_state.project_form["project_name"]:
+            st.error("❌ Project name does not match. Deletion cancelled.")
+        else:
+            try:
+                pid_to_delete = st.session_state.edit_state["project_id"]
+                
+                # Delete in order (children first, then parent)
+                # 1. Transaction-related tables
+                transaction_ids = [t["transaction_id"] for t in 
+                    supabase.table("transactions").select("transaction_id").eq("project_id", pid_to_delete).execute().data or []]
+                
+                if transaction_ids:
+                    # Delete transaction children
+                    supabase.table("transaction_attachments").delete().in_("transaction_id", transaction_ids).execute()
+                    supabase.table("payment_proofs").delete().in_("transaction_id", transaction_ids).execute()
+                    supabase.table("upi_payments").delete().in_("transaction_id", transaction_ids).execute()
+                    supabase.table("cheque_payments").delete().in_("transaction_id", transaction_ids).execute()
+                    supabase.table("netbanking_payments").delete().in_("transaction_id", transaction_ids).execute()
+                    supabase.table("transaction_sources").delete().in_("transaction_id", transaction_ids).execute()
+                    # Delete transactions
+                    supabase.table("transactions").delete().eq("project_id", pid_to_delete).execute()
+                
+                # 2. Settlement-related tables
+                settlement_ids = [s["settlement_id"] for s in 
+                    supabase.table("settlements").select("settlement_id").eq("project_id", pid_to_delete).execute().data or []]
+                
+                if settlement_ids:
+                    # Try to delete from settlement mode tables (they may not exist)
+                    try:
+                        supabase.table("upi_settlements").delete().in_("settlement_id", settlement_ids).execute()
+                    except Exception:
+                        pass  # Table doesn't exist, skip
+                    
+                    try:
+                        supabase.table("cheque_settlements").delete().in_("settlement_id", settlement_ids).execute()
+                    except Exception:
+                        pass  # Table doesn't exist, skip
+                    
+                    try:
+                        supabase.table("netbanking_settlements").delete().in_("settlement_id", settlement_ids).execute()
+                    except Exception:
+                        pass  # Table doesn't exist, skip
+                    
+                    # Delete settlements (this table should exist)
+                    supabase.table("settlements").delete().eq("project_id", pid_to_delete).execute()
+                
+                # 3. Project attachments
+                supabase.table("attachments").delete().eq("project_id", pid_to_delete).execute()
+                
+                # 4. Sub-partners and partners
+                partner_ids = [p["partner_id"] for p in 
+                    supabase.table("partners").select("partner_id").eq("project_id", pid_to_delete).execute().data or []]
+                
+                if partner_ids:
+                    supabase.table("sub_partners").delete().in_("partner_id", partner_ids).execute()
+                    supabase.table("partners").delete().eq("project_id", pid_to_delete).execute()
+                
+                # 5. Finally, delete the project itself
+                supabase.table("projects").delete().eq("project_id", pid_to_delete).execute()
+                
+                st.success("✅ Project and all associated data deleted successfully!")
+                st.toast("Project deleted.", icon="✅")
+                
+                # Clear session state and rerun
+                st.session_state.edit_state["project_id"] = None
+                st.session_state.edit_state["partners"] = []
+                st.session_state.edit_state["attachments"] = []
+                st.session_state.project_form = {
+                    "project_name": "",
+                    "description": "",
+                    "start_date": date.today(),
+                    "expected_cost": 0.0,
+                }
+                st.rerun()
+                
+            except Exception as e:
+                st.error(f"❌ Failed to delete project: {e}")

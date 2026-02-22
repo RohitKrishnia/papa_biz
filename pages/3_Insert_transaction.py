@@ -117,11 +117,21 @@ def main():
 
     stakeholder_ids, stakeholder_or_children_ids, stakeholder_name_map = build_stakeholder_sets(project_id)
 
-    # Paid By — stakeholders or their children
-    paid_by_options = [u for u in all_users if u["id"] in stakeholder_or_children_ids]
+    # Paid By — ONLY stakeholders (partners/sub-partners) or their direct children
+    # Filter to ensure only eligible users are shown
+    paid_by_options = []
+    for u in all_users:
+        user_id = u["id"]
+        # Include if user is a stakeholder OR is a direct child of a stakeholder
+        if user_id in stakeholder_or_children_ids:
+            paid_by_options.append(u)
+    
     if not paid_by_options:
         st.error("No eligible 'Paid By' users (stakeholders or their children).")
         st.stop()
+    
+    # Sort by name for better UX
+    paid_by_options.sort(key=lambda x: x["name"])
     paid_by_names = [u["name"] for u in paid_by_options]
     paid_by_name = st.selectbox("Paid By (Stakeholder or Child)", paid_by_names)
     paid_by_id = paid_by_options[paid_by_names.index(paid_by_name)]["id"]
@@ -136,7 +146,7 @@ def main():
 
     # Payment Via — ANY user (OPTIONAL)
     paid_via_options = ["— none —"] + [u["name"] for u in all_users]
-    paid_via_selection = st.selectbox("Payment Via (account/card/UPI used) — optional", paid_via_options)
+    paid_via_selection = st.selectbox("Payment Via this person — optional", paid_via_options)
     if paid_via_selection == "— none —":
         paid_via_id = None
     else:

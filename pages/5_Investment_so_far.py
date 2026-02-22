@@ -31,42 +31,46 @@ def fetch_users_basic():
     return r.data or []
 
 def fetch_partners(project_id: int):
-    r = supabase.table("partners").select("partner_id, partner_user_id, share_percentage").eq("project_id", project_id).execute()
+    r = supabase.table("partners").select("partner_id, partner_user_id, share_absolute").eq("project_id", project_id).execute()
     return r.data or []
 
 def fetch_subpartners_for(partner_ids: list):
     if not partner_ids:
         return []
-    r = supabase.table("sub_partners").select("partner_id, sub_partner_user_id, share_percentage").in_("partner_id", partner_ids).execute()
+    r = supabase.table("sub_partners").select("partner_id, sub_partner_user_id, share_absolute").in_("partner_id", partner_ids).execute()
     return r.data or []
 
-def compute_effective_ownership(project_id: int):
+def compute_effective_ownership(project_id: int, expected_cost: float):
     """
     Return ownership_map: {user_id: fraction (0..1)}
     and debug_rows: [(role, user_id, frac)]
+    Calculates % by dividing share_absolute by expected_cost
     """
     partners = fetch_partners(project_id)
-    partner_meta = {p["partner_id"]: {"user_id": p["partner_user_id"], "share": float(p.get("share_percentage") or 0.0)} for p in partners}
+    partner_meta = {p["partner_id"]: {"user_id": p["partner_user_id"], "share_abs": float(p.get("share_absolute") or 0.0)} for p in partners}
     partner_ids = list(partner_meta.keys())
     subs = fetch_subpartners_for(partner_ids)
 
     ownership = {}
     rows = []
     for pid, meta in partner_meta.items():
-        P = meta["share"] / 100.0
+        partner_share_abs = meta["share_abs"]
         subs_for_pid = [s for s in subs if s["partner_id"] == pid]
-        sub_total = 0.0
+        sub_total_abs = 0.0
         for s in subs_for_pid:
-            rel = float(s.get("share_percentage") or 0.0) / 100.0
-            sub_abs = P * rel
+            sub_share_abs = float(s.get("share_absolute") or 0.0)
             uid = s.get("sub_partner_user_id")
-            ownership[uid] = ownership.get(uid, 0.0) + sub_abs
-            sub_total += sub_abs
-            rows.append(("sub-partner", uid, sub_abs))
+            # Calculate % from absolute
+            sub_pct = (sub_share_abs / expected_cost) if expected_cost > 0 else 0.0
+            ownership[uid] = ownership.get(uid, 0.0) + sub_pct
+            sub_total_abs += sub_share_abs
+            rows.append(("sub-partner", uid, sub_pct))
         partner_uid = meta["user_id"]
-        partner_eff = max(P - sub_total, 0.0)
-        ownership[partner_uid] = ownership.get(partner_uid, 0.0) + partner_eff
-        rows.append(("partner", partner_uid, partner_eff))
+        # Partner gets remaining after sub-partners
+        partner_remaining_abs = max(partner_share_abs - sub_total_abs, 0.0)
+        partner_pct = (partner_remaining_abs / expected_cost) if expected_cost > 0 else 0.0
+        ownership[partner_uid] = ownership.get(partner_uid, 0.0) + partner_pct
+        rows.append(("partner", partner_uid, partner_pct))
     return ownership, rows
 
 def fetch_transactions(project_id: int):
@@ -97,7 +101,10 @@ def compute_contributions_by_stakeholder(project_id: int):
       external_unattributed: amount that couldn't be attributed to any stakeholder (paid_by was external and sources external)
     """
     # 1) Build stakeholder set and maps
-    ownership_map, _ = compute_effective_ownership(project_id)
+    # Get expected_cost for ownership calculation
+    proj = supabase.table("projects").select("expected_cost").eq("project_id", project_id).single().execute().data
+    expected_cost = float(proj.get("expected_cost") or 0.0)
+    ownership_map, _ = compute_effective_ownership(project_id, expected_cost)
     stakeholder_ids = set(ownership_map.keys())  # set of user_ids who are stakeholders (partners + subs)
 
     users = fetch_users_basic()  # list of {id, name, parent_user_id}
@@ -187,8 +194,26 @@ def main():
     st.info("Computing contributions from every transaction's sources — this may take a moment for large projects.")
     contributions, total_sources, external_unattributed, user_name_map, stakeholder_ids, ownership_map = compute_contributions_by_stakeholder(project_id)
 
-    # Prepare expected map (expected investment = expected_cost * ownership_fraction)
-    expected_map = {uid: expected_cost * frac for uid, frac in ownership_map.items()}
+    # Prepare expected map (expected investment = share_absolute from partners/sub_partners table)
+    # Fetch partners and sub-partners to get share_absolute
+    partners = fetch_partners(project_id)
+    partner_ids = [p["partner_id"] for p in partners]
+    subs = fetch_subpartners_for(partner_ids)
+    
+    expected_map = {}
+    for p in partners:
+        partner_share_abs = float(p.get("share_absolute") or 0.0)
+        partner_uid = p.get("partner_user_id")
+        subs_for_partner = [s for s in subs if s["partner_id"] == p["partner_id"]]
+        sub_total_abs = sum(float(s.get("share_absolute") or 0.0) for s in subs_for_partner)
+        # Partner gets remaining after sub-partners
+        partner_expected = max(partner_share_abs - sub_total_abs, 0.0)
+        expected_map[partner_uid] = expected_map.get(partner_uid, 0.0) + partner_expected
+        
+        for s in subs_for_partner:
+            sub_uid = s.get("sub_partner_user_id")
+            sub_share_abs = float(s.get("share_absolute") or 0.0)
+            expected_map[sub_uid] = expected_map.get(sub_uid, 0.0) + sub_share_abs
 
     # Build summary rows
     rows = []
@@ -202,7 +227,6 @@ def main():
         pct_of_expected = (contributed / expected_amt * 100.0) if expected_amt > 0 else None
         rows.append({
             "Stakeholder": name,
-            "Effective Ownership %": round(ownership_map.get(uid, 0.0) * 100.0, 6),
             "Contributed (from sources + leftover) (₹)": contributed,
             "Expected Investment (₹)": expected_amt,
             "Over / (Under) (₹)": diff,
@@ -255,7 +279,7 @@ def main():
         st.write(f"Total of all source rows (sum of transaction_sources.amount): {fmt_currency(total_sources)}")
         st.write(f"Total attributed (sum of contributions): {fmt_currency(total_contributed)}")
         st.write("Note: total attributed may be >= total_sources because leftover amounts are also attributed (txn.amount - sum(sources)).")
-        st.write("Ownership fractions used:")
+        st.write("Ownership percentages (calculated from share_absolute / expected_cost):")
         for uid, frac in ownership_map.items():
             st.write(f"- {user_name_map.get(uid, uid)} : {frac*100:.4f}%")
 
